@@ -497,7 +497,7 @@ For a quick local setup or for users not using Kubernetes, a `docker-compose.yam
     ```bash
     docker compose up -d
     ```
-    This command starts all services (Flask app, RQ workers, Redis, PostgreSQL) in detached mode (`-d`). The `--scale audiomuse-ai-worker=2` ensures at least two worker instances are running, which is recommended for the task processing architecture (starting from version **v0.4.0-beta** one worker should be able to handle both main and sub tasks, so a minimum of 1 replica is enough).
+    This command starts all services (Flask app, RQ workers, Redis, PostgreSQL) in detached mode (`-d`).
 4.  **Access the Application:**
     Once the containers are up, you can access the web UI at `http://localhost:8000`.
 5.  **Stopping the Services:**
