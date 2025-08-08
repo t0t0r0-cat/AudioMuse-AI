@@ -28,14 +28,14 @@ services:
 
   # AudioMuse-AI Flask application service
   audiomuse-ai-flask:
-    image: ghcr.io/neptunehub/audiomuse-ai:0.6.4-beta
+    image: ghcr.io/neptunehub/audiomuse-ai:0.6.5-beta
     container_name: audiomuse-ai-flask-app
     ports:
       - "8000:8000"
     environment:
       SERVICE_TYPE: "flask"
       MEDIASERVER_TYPE: "navidrome"
-      NAVIDROME_URL: "http://192.168.3.13:4533/"
+      NAVIDROME_URL: "YOUR-NAVIDROME-URL" #for example http://192.168.3.13:4533/
       NAVIDROME_USER: "YOUR-USER"
       NAVIDROME_PASSWORD: "YOUR-PASSWORD"
       POSTGRES_USER: "audiomuse"
@@ -55,12 +55,12 @@ services:
 
   # AudioMuse-AI RQ Worker service
   audiomuse-ai-worker:
-    image: ghcr.io/neptunehub/audiomuse-ai:0.6.4-beta
+    image: ghcr.io/neptunehub/audiomuse-ai:0.6.5-0beta
     container_name: audiomuse-ai-worker-instance
     environment:
       SERVICE_TYPE: "worker"
       MEDIASERVER_TYPE: "navidrome"
-      NAVIDROME_URL: "http://192.168.3.13:4533/"
+      NAVIDROME_URL: "YOUR-NAVIDROME-URL" #for example http://192.168.3.13:4533/
       NAVIDROME_USER: "YOUR-USER"
       NAVIDROME_PASSWORD: "YOUR-PASSWORD"
       POSTGRES_USER: "audiomuse"

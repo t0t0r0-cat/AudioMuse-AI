@@ -28,16 +28,16 @@ services:
 
   # AudioMuse-AI Flask application service
   audiomuse-ai-flask:
-    image: ghcr.io/neptunehub/audiomuse-ai:0.6.4-beta # Reflects deployment.yaml
+    image: ghcr.io/neptunehub/audiomuse-ai:0.6.5-beta # Reflects deployment.yaml
     container_name: audiomuse-ai-flask-app
     ports:
       - "8000:8000" # Map host port 8000 to container port 8000
     environment:
       SERVICE_TYPE: "flask" # Tells the container to run the Flask app
       MEDIASERVER_TYPE: "jellyfin" # Specify the media server type
-      JELLYFIN_USER_ID: "0e45c44b3e2e4da7a2be11a72a1c8575" # From jellyfin-credentials secret
-      JELLYFIN_TOKEN: "e0b8c325bc1b426c81922b90c0aa2ff1" # From jellyfin-credentials secret
-      JELLYFIN_URL: "http://jellyfin.192.168.3.131.nip.io:8087" # From audiomuse-ai-config ConfigMap
+      JELLYFIN_USER_ID: "YOUR-JF-USER-ID" #for example: 0e45c44b3e2e4da7a2be11a72a1c8575
+      JELLYFIN_TOKEN: "YOUR-JF-TOKEN" # for example: e0b8c325bc1b426c81922b90c0aa2ff1
+      JELLYFIN_URL: "YOUR-JF-URL" # for example: http://jellyfin.192.168.3.131.nip.io:8087
       # DATABASE_URL is now constructed by config.py from the following:
       POSTGRES_USER: "audiomuse"
       POSTGRES_PASSWORD: "audiomusepassword"
@@ -56,14 +56,14 @@ services:
 
   # AudioMuse-AI RQ Worker service
   audiomuse-ai-worker:
-    image: ghcr.io/neptunehub/audiomuse-ai:0.6.4-beta # Reflects deployment.yaml
+    image: ghcr.io/neptunehub/audiomuse-ai:0.6.5-beta # Reflects deployment.yaml
     container_name: audiomuse-ai-worker-instance
     environment:
       SERVICE_TYPE: "worker" # Tells the container to run the RQ worker
       MEDIASERVER_TYPE: "jellyfin" # Specify the media server type
-      JELLYFIN_USER_ID: "0e45c44b3e2e4da7a2be11a72a1c8575" # From jellyfin-credentials secret
-      JELLYFIN_TOKEN: "e0b8c325bc1b426c81922b90c0aa2ff1" # From jellyfin-credentials secret
-      JELLYFIN_URL: "http://jellyfin.192.168.3.131.nip.io:8087" # From audiomuse-ai-config ConfigMap
+      JELLYFIN_USER_ID: "YOUR-JF-USER-ID" #for example: 0e45c44b3e2e4da7a2be11a72a1c8575
+      JELLYFIN_TOKEN: "YOUR-JF-TOKEN" # for example: e0b8c325bc1b426c81922b90c0aa2ff1
+      JELLYFIN_URL: "YOUR-JF-URL" # for example: http://jellyfin.192.168.3.131.nip.io:8087
       # DATABASE_URL is now constructed by config.py from the following:
       POSTGRES_USER: "audiomuse"
       POSTGRES_PASSWORD: "audiomusepassword"

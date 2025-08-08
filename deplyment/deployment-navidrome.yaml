@@ -43,7 +43,7 @@ metadata:
   namespace: playlist
 data:
   MEDIASERVER_TYPE: "navidrome"
-  NAVIDROME_URL: "http://192.168.3.13:4533/"
+  NAVIDROME_URL: "YOUR-NAVIDROME-URL" #for example http://192.168.3.13:4533/
   POSTGRES_HOST: "postgres-service.playlist"
   POSTGRES_PORT: "5432"
   REDIS_URL: "redis://redis-service.playlist:6379/0"
@@ -195,7 +195,7 @@ spec:
         fsGroup: 0
       containers:
       - name: flask-app
-        image: ghcr.io/neptunehub/audiomuse-ai:0.6.4-beta
+        image: ghcr.io/neptunehub/audiomuse-ai:0.6.5-beta
         imagePullPolicy: Always
         ports:
         - containerPort: 8000
@@ -306,7 +306,7 @@ spec:
         fsGroup: 0
       containers:
       - name: rq-worker
-        image: ghcr.io/neptunehub/audiomuse-ai:0.6.4-beta
+        image: ghcr.io/neptunehub/audiomuse-ai:0.6.5-beta
         imagePullPolicy: Always
         env:
         - name: SERVICE_TYPE
