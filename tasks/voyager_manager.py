@@ -187,6 +187,25 @@ def load_voyager_index_for_querying(force_reload=False):
     finally:
         cur.close()
 
+def get_vector_by_id(item_id: str) -> np.ndarray | None:
+    """
+    Retrieves the embedding vector for a given item_id from the loaded Voyager index.
+    """
+    if voyager_index is None or reverse_id_map is None:
+        logger.error("Voyager index is not loaded, cannot retrieve vector.")
+        return None
+    
+    voyager_id = reverse_id_map.get(item_id)
+    if voyager_id is None:
+        logger.warning(f"Item ID '{item_id}' not found in Voyager's reverse ID map.")
+        return None
+    
+    try:
+        return voyager_index.get_vector(voyager_id)
+    except Exception as e:
+        logger.error(f"Failed to retrieve vector for item_id {item_id} (Voyager ID: {voyager_id}): {e}")
+        return None
+
 def _normalize_string(text: str) -> str:
     """Lowercase and strip whitespace."""
     if not text:
@@ -464,13 +483,19 @@ def search_tracks_by_title_and_artist(title_query: str, artist_query: str, limit
         query_parts = []
         params = []
         
-        if artist_query:
-            query_parts.append("author ILIKE %s")
-            params.append(f"%{artist_query}%")
-            
-        if title_query:
-            query_parts.append("title ILIKE %s")
-            params.append(f"%{title_query}%")
+        # Handle combined artist and title search in one input
+        if title_query and not artist_query:
+            # Search both title and artist fields with the same query
+            query_parts.append("(title ILIKE %s OR author ILIKE %s)")
+            params.extend([f"%{title_query}%", f"%{title_query}%"])
+        else:
+            if artist_query:
+                query_parts.append("author ILIKE %s")
+                params.append(f"%{artist_query}%")
+                
+            if title_query:
+                query_parts.append("title ILIKE %s")
+                params.append(f"%{title_query}%")
 
         if not query_parts:
             return []

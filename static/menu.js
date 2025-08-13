@@ -44,6 +44,7 @@ document.addEventListener('DOMContentLoaded', function() {
         { href: '/', text: 'Analysis and Clustering' },
         { href: '/chat', text: 'Instant Playlist' },
         { href: '/similarity', text: 'Playlist from Similar Song' },
+        { href: '/path', text: 'Song Path' },
         { href: '/sonic_fingerprint', text: 'Sonic Fingerprint' }
     ];
 
