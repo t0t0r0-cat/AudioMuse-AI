@@ -12,7 +12,7 @@ Dockerfile
 
 # Deployment files
 # These are for deploying the container, not for running the code inside it.
-deployments/
+deployment/
 test/
 
 # Python virtual environment and cache

@@ -178,7 +178,7 @@ This section provides a minimal guide to deploy AudioMuse-AI on a K3S (Kubernete
     *   Respect the HW requirements (look the specific chapter)
 
 2.  **Configuration:**
-    *   Navigate to the `deployments/` directory.
+    *   Navigate to the `deployment/` directory.
     *   Edit `deployment.yaml` to configure mandatory parameters:
         *   **Secrets:**
             *   `jellyfin-credentials`: Update `api_token` and `user_id`.
@@ -189,7 +189,7 @@ This section provides a minimal guide to deploy AudioMuse-AI on a K3S (Kubernete
             *   Ensure `POSTGRES_HOST`, `POSTGRES_PORT`, and `REDIS_URL` are correct for your setup (defaults are for in-cluster services).
 3.  **Deploy:**
     ```bash
-    kubectl apply -f deployments/deployment.yaml
+    kubectl apply -f deployment/deployment.yaml
     ```
 4.  **Access:**
     *   **Main UI:** Access at `http://<EXTERNAL-IP>:8000`
@@ -199,7 +199,7 @@ This section provides a minimal guide to deploy AudioMuse-AI on a K3S (Kubernete
 In case you want to deploy AudioMuse-AI on K3S but interacting with Navidrome there is just some minimal configuration changes:
 
 *  **Configuration:**
-    *   Navigate to the `deployments/` directory.
+    *   Navigate to the `deployment/` directory.
     *   Edit `deployment-yaml.yaml` to configure mandatory parameters:
         *   **Secrets:**
             *   `navidrome-credentials`: Update `NAVIDROME_USER` and `NAVIDROME_PASSWORD`.
