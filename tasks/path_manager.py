@@ -4,18 +4,14 @@ import logging
 from collections import Counter
 from .voyager_manager import find_nearest_neighbors_by_id, get_vector_by_id
 import numpy as np
+from config import (
+    PATH_A_STAR_ITERATION_LIMIT,
+    PATH_MAX_SONGS_PER_ARTIST,
+    PATH_ARTIST_PENALTY,
+    PATH_NEIGHBOR_COUNT
+)
 
 logger = logging.getLogger(__name__)
-
-# --- Tunable constants for the pathfinding algorithm ---
-# The maximum number of iterations for the initial A* search before falling back.
-A_STAR_ITERATION_LIMIT = 5000
-# The maximum number of songs by a single artist before a penalty is applied.
-MAX_SONGS_PER_ARTIST_IN_PATH = 3
-# The penalty added to the cost for each additional song by an artist over the max.
-ARTIST_PENALTY = 0.1 
-# The number of neighbors to explore at each step of the search.
-NEIGHBOR_COUNT = 10
 
 
 def heuristic(v1, v2):
@@ -49,7 +45,7 @@ def _run_greedy_search_to_target(start_id, target_id, max_len, excluded_artists=
         if current_id == target_id:
             break
 
-        neighbors = find_nearest_neighbors_by_id(current_id, n=NEIGHBOR_COUNT, eliminate_duplicates=True)
+        neighbors = find_nearest_neighbors_by_id(current_id, n=PATH_NEIGHBOR_COUNT, eliminate_duplicates=True)
         if not neighbors:
             logger.warning(f"Greedy search stuck at {current_id}, no new neighbors found.")
             break
@@ -68,7 +64,7 @@ def _run_greedy_search_to_target(start_id, target_id, max_len, excluded_artists=
                 continue
             
             # Penalize artists that are already frequent in the greedy path itself
-            if neighbor_artist and artist_counts.get(neighbor_artist, 0) >= MAX_SONGS_PER_ARTIST_IN_PATH:
+            if neighbor_artist and artist_counts.get(neighbor_artist, 0) >= PATH_MAX_SONGS_PER_ARTIST:
                 continue
 
             neighbor_vector = get_vector_by_id(neighbor_id)
@@ -125,7 +121,7 @@ def find_path_between_songs(start_item_id, end_item_id, max_steps=10):
     min_heuristic_so_far = heuristic(start_vector, end_vector)
     
     iterations = 0
-    while open_set and iterations < A_STAR_ITERATION_LIMIT:
+    while open_set and iterations < PATH_A_STAR_ITERATION_LIMIT:
         iterations += 1
         _, cost_so_far, current_path = heapq.heappop(open_set)
         current_song_id = current_path[-1]
@@ -147,7 +143,7 @@ def find_path_between_songs(start_item_id, end_item_id, max_steps=10):
             continue
         closed_set.add(current_song_id)
 
-        neighbors = find_nearest_neighbors_by_id(current_song_id, n=NEIGHBOR_COUNT, eliminate_duplicates=True)
+        neighbors = find_nearest_neighbors_by_id(current_song_id, n=PATH_NEIGHBOR_COUNT, eliminate_duplicates=True)
         if not neighbors:
             continue
             
@@ -172,15 +168,15 @@ def find_path_between_songs(start_item_id, end_item_id, max_steps=10):
             new_cost = cost_so_far + distance
 
             neighbor_artist = all_track_details.get(neighbor_id, {}).get('author')
-            if neighbor_artist and artist_counts.get(neighbor_artist, 0) >= MAX_SONGS_PER_ARTIST_IN_PATH:
-                new_cost += ARTIST_PENALTY
+            if neighbor_artist and artist_counts.get(neighbor_artist, 0) >= PATH_MAX_SONGS_PER_ARTIST:
+                new_cost += PATH_ARTIST_PENALTY
 
             new_path = current_path + [neighbor_id]
             priority = new_cost + heuristic(neighbor_vector, end_vector)
             heapq.heappush(open_set, (priority, new_cost, new_path))
 
     # --- Fallback: Bidirectional Greedy Search ---
-    logger.warning(f"A* did not find a complete path within {A_STAR_ITERATION_LIMIT} iterations. Initiating fallback.")
+    logger.warning(f"A* did not find a complete path within {PATH_A_STAR_ITERATION_LIMIT} iterations. Initiating fallback.")
     
     path_a_to_b = closest_path_so_far
     
