@@ -199,10 +199,8 @@ VOYAGER_M = int(os.environ.get("VOYAGER_M", "64"))
 VOYAGER_QUERY_EF = int(os.environ.get("VOYAGER_QUERY_EF", "1024"))
 
 # --- Pathfinding Constants ---
-PATH_A_STAR_ITERATION_LIMIT = int(os.environ.get("PATH_A_STAR_ITERATION_LIMIT", "5000"))
-PATH_MAX_SONGS_PER_ARTIST = int(os.environ.get("PATH_MAX_SONGS_PER_ARTIST", "3"))
-PATH_ARTIST_PENALTY = float(os.environ.get("PATH_ARTIST_PENALTY", "0.1"))
-PATH_NEIGHBOR_COUNT = int(os.environ.get("PATH_NEIGHBOR_COUNT", "10"))
+PATH_CENTROID_PERCENTAGE = int(os.environ.get("PATH_CENTROID_PERCENTAGE", "80"))
+PATH_NEIGHBOR_PERCENTAGE = int(os.environ.get("PATH_NEIGHBOR_PERCENTAGE", "100"))
 
 
 # --- Other Essentia Model Paths ---

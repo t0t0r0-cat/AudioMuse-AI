@@ -213,14 +213,32 @@
                         max_steps: maxSteps
                     });
                     const response = await fetch(`/api/find_path?${params}`);
-                    const data = await response.json();
-
-                    if (!response.ok) throw new Error(data.error || `HTTP error! status: ${response.status}`);
                     
+                    // --- ROBUST ERROR HANDLING ---
+                    if (!response.ok) {
+                        let errorData;
+                        try {
+                            errorData = await response.json();
+                        } catch (e) {
+                            throw new Error(`Server returned an error (HTTP ${response.status})`);
+                        }
+                        throw new Error(errorData.error || `An unknown server error occurred.`);
+                    }
+                    
+                    const data = await response.json();
+                    
+                    if (!data.path || data.path.length <= 1) {
+                        throw new Error("Could not find a valid path between the two songs.");
+                    }
+
                     const path = data.path;
                     currentTrackIds = path.map(track => track.item_id);
 
-                    statusDiv.textContent = `Found a path with ${path.length} songs. Total distance: ${data.total_distance.toFixed(4)}`;
+                    const distanceText = typeof data.total_distance === 'number'
+                        ? `Jump distance: ${data.total_distance.toFixed(4)}`
+                        : 'Distance not available.';
+
+                    statusDiv.textContent = `Found a path with ${path.length} songs. ${distanceText}`;
                     const tableHTML = `
                         <table>
                             <thead>
