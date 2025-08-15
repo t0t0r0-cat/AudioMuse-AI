@@ -2,6 +2,7 @@
 from flask import Blueprint, jsonify, request, render_template
 import logging
 from tasks.path_manager import find_path_between_songs
+from config import PATH_DEFAULT_LENGTH
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +23,8 @@ def find_path_endpoint():
     """
     start_song_id = request.args.get('start_song_id')
     end_song_id = request.args.get('end_song_id')
-    max_steps = request.args.get('max_steps', 10, type=int)
+    # Use the default from config if max_steps is not provided in the request
+    max_steps = request.args.get('max_steps', PATH_DEFAULT_LENGTH, type=int)
 
     if not start_song_id or not end_song_id:
         return jsonify({"error": "Both a start and end song must be provided."}), 400

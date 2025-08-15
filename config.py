@@ -199,6 +199,8 @@ VOYAGER_M = int(os.environ.get("VOYAGER_M", "64"))
 VOYAGER_QUERY_EF = int(os.environ.get("VOYAGER_QUERY_EF", "1024"))
 
 # --- Pathfinding Constants ---
+# Default number of songs in the path if not specified in the API request.
+PATH_DEFAULT_LENGTH = int(os.environ.get("PATH_DEFAULT_LENGTH", "25"))
 # Number of random songs to sample for calculating the average jump distance.
 PATH_AVG_JUMP_SAMPLE_SIZE = int(os.environ.get("PATH_AVG_JUMP_SAMPLE_SIZE", "200"))
 # Number of candidate songs to retrieve from Voyager for each step in the path.
