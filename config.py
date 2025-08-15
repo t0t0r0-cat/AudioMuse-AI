@@ -199,8 +199,10 @@ VOYAGER_M = int(os.environ.get("VOYAGER_M", "64"))
 VOYAGER_QUERY_EF = int(os.environ.get("VOYAGER_QUERY_EF", "1024"))
 
 # --- Pathfinding Constants ---
-PATH_CENTROID_PERCENTAGE = int(os.environ.get("PATH_CENTROID_PERCENTAGE", "80"))
-PATH_NEIGHBOR_PERCENTAGE = int(os.environ.get("PATH_NEIGHBOR_PERCENTAGE", "100"))
+# Number of random songs to sample for calculating the average jump distance.
+PATH_AVG_JUMP_SAMPLE_SIZE = int(os.environ.get("PATH_AVG_JUMP_SAMPLE_SIZE", "200"))
+# Number of candidate songs to retrieve from Voyager for each step in the path.
+PATH_CANDIDATES_PER_STEP = int(os.environ.get("PATH_CANDIDATES_PER_STEP", "25"))
 
 
 # --- Other Essentia Model Paths ---
