@@ -13,6 +13,7 @@ Dockerfile
 # Deployment files
 # These are for deploying the container, not for running the code inside it.
 deployment/
+!deployment/supervisord.conf
 test/
 
 # Python virtual environment and cache
