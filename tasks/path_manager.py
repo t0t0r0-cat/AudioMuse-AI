@@ -9,7 +9,7 @@ from .voyager_manager import get_vector_by_id, find_nearest_neighbors_by_vector,
 from app import get_db, get_score_data_by_ids
 from config import (
     PATH_AVG_JUMP_SAMPLE_SIZE, PATH_CANDIDATES_PER_STEP, PATH_DEFAULT_LENGTH,
-    PATH_DISTANCE_METRIC, VOYAGER_METRIC
+    PATH_DISTANCE_METRIC, VOYAGER_METRIC, PATH_LCORE_MULTIPLIER
 )
 
 logger = logging.getLogger(__name__)
@@ -222,8 +222,8 @@ def find_path_between_songs(start_item_id, end_item_id, Lreq=PATH_DEFAULT_LENGTH
     Lcore = min(Lreq, Lmax)
     Lcore = max(2, Lcore)
 
-    #Double the LCORE
-    Lcore *= 2
+    # Multiply Lcore by the configurable factor to increase centroid density
+    Lcore *= PATH_LCORE_MULTIPLIER
 
 
     logger.info(f"Direct distance (D): {D:.4f}, Local avg jump (δ_avg): {delta_avg:.4f}")

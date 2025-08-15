@@ -445,6 +445,7 @@ This are the default parameters on wich the analysis or clustering task will be 
 | `PATH_DEFAULT_LENGTH`                  | Default number of songs in the path if not specified in the API request     | `25`          |
 | `PATH_AVG_JUMP_SAMPLE_SIZE`            | Number of random songs to sample for calculating the average jump distance  | `200`         |
 | `PATH_CANDIDATES_PER_STEP`             | Number of candidate songs to retrieve from Voyager for each step in the path| `25`          |
+| `PATH_LCORE_MULTIPLIER`             | It multiply the number of centroid created based on the distance. Higher is better for distant song and worst for nearest.| `3`          |
 | **Evolutionary Clustering & Scoring**    |                                                                              |                                      |
 | `ITERATIONS_PER_BATCH_JOB`               | Number of clustering iterations processed per RQ batch job.                | `20`                                |
 | `MAX_CONCURRENT_BATCH_JOBS`              | Maximum number of clustering batch jobs to run simultaneously.             | `10`                                  |
