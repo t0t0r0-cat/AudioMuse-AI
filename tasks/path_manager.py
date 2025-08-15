@@ -7,7 +7,10 @@ import psycopg2 # Import psycopg2 to catch specific errors
 # Imports from the project
 from .voyager_manager import get_vector_by_id, find_nearest_neighbors_by_vector, find_nearest_neighbors_by_id
 from app import get_db, get_score_data_by_ids
-from config import PATH_AVG_JUMP_SAMPLE_SIZE, PATH_CANDIDATES_PER_STEP, PATH_DEFAULT_LENGTH
+from config import (
+    PATH_AVG_JUMP_SAMPLE_SIZE, PATH_CANDIDATES_PER_STEP, PATH_DEFAULT_LENGTH,
+    PATH_DISTANCE_METRIC, VOYAGER_METRIC
+)
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +20,62 @@ def get_euclidean_distance(v1, v2):
     if v1 is not None and v2 is not None:
         return np.linalg.norm(v1 - v2)
     return float('inf')
+
+
+def get_angular_distance(v1, v2):
+    """Calculates the angular distance (derived from cosine similarity) between two vectors."""
+    if v1 is not None and v2 is not None and np.linalg.norm(v1) > 0 and np.linalg.norm(v2) > 0:
+        # Normalize vectors to unit length
+        v1_u = v1 / np.linalg.norm(v1)
+        v2_u = v2 / np.linalg.norm(v2)
+        # Calculate cosine similarity, clipping to handle potential floating point inaccuracies
+        cosine_similarity = np.clip(np.dot(v1_u, v2_u), -1.0, 1.0)
+        # Angular distance is derived from the angle: arccos(similarity) / pi
+        return np.arccos(cosine_similarity) / np.pi
+    return float('inf')
+
+
+def get_distance(v1, v2):
+    """Calculates distance based on the configured metric."""
+    if PATH_DISTANCE_METRIC == 'angular':
+        return get_angular_distance(v1, v2)
+    else: # Default to euclidean
+        return get_euclidean_distance(v1, v2)
+
+
+def interpolate_centroids(v1, v2, num, metric="euclidean"):
+    """
+    Generate interpolated centroid vectors between v1 and v2
+    based on the chosen metric: 'euclidean' or 'angular'.
+    """
+    v1 = np.array(v1, dtype=float)
+    v2 = np.array(v2, dtype=float)
+    
+    if metric == "angular":
+        # Normalize to unit vectors
+        v1_u = v1 / np.linalg.norm(v1)
+        v2_u = v2 / np.linalg.norm(v2)
+        
+        # Compute the angle between them
+        dot = np.clip(np.dot(v1_u, v2_u), -1.0, 1.0)
+        theta = np.arccos(dot)
+        
+        # If vectors are almost identical, fallback to linear
+        if np.isclose(theta, 0):
+            return np.linspace(v1, v2, num=num)
+        
+        # Spherical linear interpolation (SLERP)
+        t_vals = np.linspace(0, 1, num)
+        centroids = []
+        for t in t_vals:
+            s1 = np.sin((1 - t) * theta) / np.sin(theta)
+            s2 = np.sin(t * theta) / np.sin(theta)
+            centroids.append(s1 * v1_u + s2 * v2_u)
+        return np.array(centroids)
+    
+    else:
+        # Default: Euclidean interpolation
+        return np.linspace(v1, v2, num=num)
 
 
 def _create_path_from_ids(path_ids):
@@ -36,34 +95,45 @@ def _create_path_from_ids(path_ids):
 
 def _calculate_local_average_jump_distance(start_item_id, end_item_id, sample_size=PATH_AVG_JUMP_SAMPLE_SIZE):
     """
-    Calculates the average Euclidean distance based on the direct neighbors of the
-    start and end songs, without querying the broader database.
+    Calculates the average distance by creating a chain of neighbors and measuring the
+    distance between each step in the chain.
     """
-    logger.info(f"Calculating local average jump distance based on neighbors of {start_item_id} and {end_item_id}.")
+    logger.info(f"Calculating chained average jump distance ({PATH_DISTANCE_METRIC}) for neighbors of {start_item_id} and {end_item_id}.")
     
     distances = []
     
     # Process neighbors for both the start and end points
     for item_id in [start_item_id, end_item_id]:
         try:
-            # Find a sample of neighbors using Voyager
+            # Step 1: Use Voyager to get an ordered list of neighbor IDs.
             neighbors = find_nearest_neighbors_by_id(item_id, n=sample_size)
             if not neighbors:
                 continue
 
-            # The distance for these neighbors is already provided by the Voyager query result
-            for neighbor in neighbors:
-                distances.append(neighbor['distance'])
+            source_vector = get_vector_by_id(item_id)
+            if source_vector is None:
+                continue
+
+            # Step 2: Create a chain of vectors: [start_song, neighbor_1, neighbor_2, ...]
+            neighbor_vectors = [get_vector_by_id(n['item_id']) for n in neighbors]
+            # Filter out any None vectors that may have failed to fetch
+            valid_neighbor_vectors = [v for v in neighbor_vectors if v is not None]
+            vector_chain = [source_vector] + valid_neighbor_vectors
+
+            # Step 3: Calculate the distance between each consecutive item in the chain.
+            for i in range(len(vector_chain) - 1):
+                dist = get_distance(vector_chain[i], vector_chain[i+1])
+                distances.append(dist)
 
         except Exception as e:
-            logger.warning(f"Could not process neighbors for song {item_id} during local jump calculation: {e}")
+            logger.warning(f"Could not process neighbors for song {item_id} during chained jump calculation: {e}")
 
     if not distances:
-        logger.error("No valid neighbor distances could be calculated from start/end songs.")
+        logger.error("No valid chained distances could be calculated from start/end songs.")
         return 0.1 # Return a sensible fallback default
 
     avg_dist = np.mean(distances)
-    logger.info(f"Calculated local average jump distance: {avg_dist:.4f} from {len(distances)} neighbors.")
+    logger.info(f"Calculated chained average jump distance: {avg_dist:.4f} from {len(distances)} steps.")
     return avg_dist
 
 
@@ -110,7 +180,7 @@ def _find_best_unique_song(centroid_vec, used_song_ids, used_signatures):
         if candidate_id not in used_song_ids and signature not in used_signatures:
             candidate_vector = get_vector_by_id(candidate_id)
             if candidate_vector is not None:
-                dist = get_euclidean_distance(candidate_vector, centroid_vec)
+                dist = get_distance(candidate_vector, centroid_vec)
                 if dist < min_dist_to_centroid:
                     min_dist_to_centroid = dist
                     best_song_info = {
@@ -147,10 +217,14 @@ def find_path_between_songs(start_item_id, end_item_id, Lreq=PATH_DEFAULT_LENGTH
         logger.error("Average jump distance (delta_avg) is not available or zero.")
         return None, 0.0
 
-    D = get_euclidean_distance(start_vector, end_vector)
-    Lmax = int(np.floor(D / delta_avg)) + 1
+    D = get_distance(start_vector, end_vector)
+    Lmax = int(np.floor(D / delta_avg)) + 1 if delta_avg > 0 else Lreq
     Lcore = min(Lreq, Lmax)
     Lcore = max(2, Lcore)
+
+    #Double the LCORE
+    Lcore *= 2
+
 
     logger.info(f"Direct distance (D): {D:.4f}, Local avg jump (δ_avg): {delta_avg:.4f}")
     logger.info(f"Requested steps (L_req): {Lreq}, Max realistic (L_max): {Lmax}, Using core steps (L_core): {Lcore}")
@@ -158,7 +232,9 @@ def find_path_between_songs(start_item_id, end_item_id, Lreq=PATH_DEFAULT_LENGTH
     if Lcore < 2:
         return _create_path_from_ids([start_item_id, end_item_id]), D
 
-    backbone_centroids = np.linspace(start_vector, end_vector, num=Lcore)
+    backbone_centroids = interpolate_centroids(
+        start_vector, end_vector, num=Lcore, metric=PATH_DISTANCE_METRIC
+    )
     path_ids = [start_item_id]
 
     for i in range(1, Lcore - 1):
@@ -195,7 +271,9 @@ def find_path_between_songs(start_item_id, end_item_id, Lreq=PATH_DEFAULT_LENGTH
                 end_segment_vec = get_vector_by_id(end_segment_id)
 
                 if start_segment_vec is not None and end_segment_vec is not None:
-                    intermediate_centroids = np.linspace(start_segment_vec, end_segment_vec, num=num_to_insert + 2)[1:-1]
+                    intermediate_centroids = interpolate_centroids(
+                        start_segment_vec, end_segment_vec, num=num_to_insert + 2, metric=PATH_DISTANCE_METRIC
+                    )[1:-1]
                     
                     for centroid_vec in intermediate_centroids:
                         best_song = _find_best_unique_song(centroid_vec, used_song_ids, used_signatures)
@@ -218,6 +296,6 @@ def find_path_between_songs(start_item_id, end_item_id, Lreq=PATH_DEFAULT_LENGTH
             v1 = path_vectors[i]
             v2 = path_vectors[i+1]
             if v1 is not None and v2 is not None:
-                total_path_distance += get_euclidean_distance(v1, v2)
+                total_path_distance += get_distance(v1, v2)
 
     return final_path_details, total_path_distance
