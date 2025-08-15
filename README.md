@@ -30,10 +30,9 @@ The **supported architecture** are:
 
 
 And now just some **NEWS:**
+> * Version 0.6.5-beta introduce the **Song Path** feature. Input two song and get a sonic path between them.
 > * Version 0.6.4-beta introdcue **Sonic Fingerprint** turn your listening history in a fingerprint to discover similar sonic songs.
 > * Version 0.6.3-beta introduce **Voyager index** for the similarity function. Raising the recall from 70-80% to 99% for 100 similar song. Also using less memory.
-> * Version 0.6.2-beta introduce the **TOP Playlist Number** parameter for clustering tasks, let's keep only the most diverse playlists! 
-> * From version 0.6.1-beta also [Navidrome](https://www.navidrome.org/) is supported.
 
 ## **Table of Contents**
 
@@ -42,7 +41,8 @@ And now just some **NEWS:**
 - [Front-End Quick Start: Analysis and Clustering Parameters](#front-end-quick-start-analysis-and-clustering-parameters)
 - [Instant Playlist (via Chat Interface)](#instant-playlist-via-chat-interface)
 - [Playlist from Similar song (via similarity Interface)](#playlist-from-similar-song-via-similarity-interface)
-- [Sonic Fingerprint playlist (via sonic_fingerprint Interface](#sonic-fingerprint-playlist-via-sonic_fingerprint-interface)
+- [Sonic Fingerprint playlist (via sonic_fingerprint Interface)](#sonic-fingerprint-playlist-via-sonic_fingerprint-interface)
+- [Song Path playlist (via path Interface)](#song-path-playlist-via-path-interface)
 - [Kubernetes Deployment (K3S Example)](#kubernetes-deployment-k3s-example)
 - [Hardware Requirements](#hardware-requirements)
 - [Configuration Parameters](#configuration-parameters)
@@ -324,6 +324,9 @@ This new functionality analyze your listening history and create your specific s
     *   Ask the front-end to generate the list of Sonic Fingerprint track, it will show to you in the table.
 6.  **Review and Create:**
     *   Input a name for the playlist and ask the interface to create it directly on Jellyfin or Navidrome. That's it!
+
+## **Song Path playlist (via path Interface)**
+placeholder
 
 ## **Kubernetes Deployment (K3S Example)**
 
