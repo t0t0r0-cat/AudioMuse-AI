@@ -6,7 +6,7 @@ import numpy as np
 import voyager # type: ignore
 import psycopg2 # type: ignore
 from psycopg2.extras import DictCursor
-import io # Import the io module
+import io 
 import re
 
 from config import (
@@ -187,6 +187,25 @@ def load_voyager_index_for_querying(force_reload=False):
     finally:
         cur.close()
 
+def get_vector_by_id(item_id: str) -> np.ndarray | None:
+    """
+    Retrieves the embedding vector for a given item_id from the loaded Voyager index.
+    """
+    if voyager_index is None or reverse_id_map is None:
+        logger.error("Voyager index is not loaded, cannot retrieve vector.")
+        return None
+    
+    voyager_id = reverse_id_map.get(item_id)
+    if voyager_id is None:
+        logger.warning(f"Item ID '{item_id}' not found in Voyager's reverse ID map.")
+        return None
+    
+    try:
+        return voyager_index.get_vector(voyager_id)
+    except Exception as e:
+        logger.error(f"Failed to retrieve vector for item_id {item_id} (Voyager ID: {voyager_id}): {e}")
+        return None
+
 def _normalize_string(text: str) -> str:
     """Lowercase and strip whitespace."""
     if not text:
@@ -222,8 +241,6 @@ def _deduplicate_and_filter_neighbors(song_results: list, db_conn, original_song
             item_details[row['item_id']] = {'title': row['title'], 'author': row['author']}
 
     unique_songs = []
-    # FIX: Initialize the list of added songs with the original song's details.
-    # This ensures we don't add any neighbors that are duplicates of the original song.
     added_songs_details = [{'title': original_song_details['title'], 'author': original_song_details['author']}] 
 
     for song in song_results:
@@ -260,7 +277,6 @@ def find_nearest_neighbors_by_id(target_item_id: str, n: int = 10, eliminate_dup
     from app import get_db, get_score_data_by_ids
     db_conn = get_db()
 
-    # FIX: Fetch details of the original song to use for deduplication.
     target_song_details_list = get_score_data_by_ids([target_item_id])
     if not target_song_details_list:
         logger.error(f"Could not retrieve details for the target song {target_item_id}. Aborting neighbor search.")
@@ -279,18 +295,39 @@ def find_nearest_neighbors_by_id(target_item_id: str, n: int = 10, eliminate_dup
         logger.error(f"Could not retrieve vector for Voyager ID {target_voyager_id} (item_id: {target_item_id}): {e}")
         return []
 
-    # If eliminating duplicates by artist, search for a much larger number of neighbors first.
     if eliminate_duplicates:
-        # Query more to have a pool for filtering. +1 for the original song.
         k_increase = max(5, int(n * 4))
-        num_to_query = n + k_increase + 1 # +1 to account for the query song itself
+        num_to_query = n + k_increase + 1
     else:
-        # Standard query size increase for basic song-level deduplication
         k_increase = max(5, int(n * 0.20))
-        num_to_query = n + k_increase + 1 # +1 to account for the query song itself
+        num_to_query = n + k_increase + 1
 
-    # Query for neighbors.
-    neighbor_voyager_ids, distances = voyager_index.query(query_vector, k=num_to_query)
+    # --- START: Graceful handling for small collections ---
+    # 1. Proactively cap the number of neighbors to the total items in the index.
+    original_num_to_query = num_to_query
+    if num_to_query > len(voyager_index):
+        logger.warning(
+            f"Voyager query request for {n} final items was expanded to {original_num_to_query} neighbors for processing. "
+            f"This exceeds the total items in the index ({len(voyager_index)}). "
+            f"Capping the actual query to {len(voyager_index)} items."
+        )
+        num_to_query = len(voyager_index)
+
+    # 2. Query for neighbors, catching RecallError if not enough neighbors can be found.
+    try:
+        if num_to_query <= 1: # Must be > 1 to find neighbors other than the query item itself
+             logger.warning(f"Number of neighbors to query ({num_to_query}) is too small. Skipping query.")
+             neighbor_voyager_ids, distances = [], []
+        else:
+             neighbor_voyager_ids, distances = voyager_index.query(query_vector, k=num_to_query)
+    except voyager.RecallError as e:
+        logger.warning(f"Voyager RecallError for item '{target_item_id}': {e}. "
+                       "This is expected with small or sparse datasets. Returning empty list.")
+        return []
+    except Exception as e:
+        logger.error(f"An unexpected error occurred during Voyager query for item '{target_item_id}': {e}", exc_info=True)
+        return []
+    # --- END: Graceful handling ---
 
     initial_results = []
     # Create a list of results, excluding the original song itself.
@@ -299,13 +336,9 @@ def find_nearest_neighbors_by_id(target_item_id: str, n: int = 10, eliminate_dup
         if item_id and item_id != target_item_id:
             initial_results.append({"item_id": item_id, "distance": float(dist)})
 
-    # First, perform the song-level deduplication (e.g., remove remixes)
-    # FIX: Pass the original song's details to the deduplication function.
     unique_results_by_song = _deduplicate_and_filter_neighbors(initial_results, db_conn, target_song_details)
     
-    # Now, if requested, filter by artist count
     if eliminate_duplicates:
-        # We need author information. We can fetch it once for all unique songs.
         item_ids_to_check = [r['item_id'] for r in unique_results_by_song]
         
         track_details_list = get_score_data_by_ids(item_ids_to_check)
@@ -328,7 +361,6 @@ def find_nearest_neighbors_by_id(target_item_id: str, n: int = 10, eliminate_dup
     else:
         final_results = unique_results_by_song
 
-    # Finally, return the top N results from the processed list.
     return final_results[:n]
 
 def find_nearest_neighbors_by_vector(query_vector: np.ndarray, n: int = 100, eliminate_duplicates: bool = False):
@@ -342,14 +374,37 @@ def find_nearest_neighbors_by_vector(query_vector: np.ndarray, n: int = 100, eli
     from app import get_db, get_score_data_by_ids
     db_conn = get_db()
 
-    # Since this is a synthetic vector, we don't need to exclude a target song.
-    # We query for a larger number to have a pool for filtering.
     if eliminate_duplicates:
         num_to_query = n + int(n * 4) # Get a large pool for artist filtering
     else:
         num_to_query = n + int(n * 0.2) # Smaller pool for just song-level deduplication
 
-    neighbor_voyager_ids, distances = voyager_index.query(query_vector, k=num_to_query)
+    # --- START: Graceful handling for small collections ---
+    # 1. Proactively cap the number of neighbors to the total items in the index.
+    original_num_to_query = num_to_query
+    if num_to_query > len(voyager_index):
+        logger.warning(
+            f"Voyager query request for {n} final items was expanded to {original_num_to_query} neighbors for processing. "
+            f"This exceeds the total items in the index ({len(voyager_index)}). "
+            f"Capping the actual query to {len(voyager_index)} items."
+        )
+        num_to_query = len(voyager_index)
+
+    # 2. Query for neighbors, catching RecallError if not enough neighbors can be found.
+    try:
+        if num_to_query <= 0:
+            logger.warning("Number of neighbors to query is zero or less. Skipping query.")
+            neighbor_voyager_ids, distances = [], []
+        else:
+            neighbor_voyager_ids, distances = voyager_index.query(query_vector, k=num_to_query)
+    except voyager.RecallError as e:
+        logger.warning(f"Voyager RecallError for synthetic vector query: {e}. "
+                       "This is expected with small or sparse datasets. Returning empty list.")
+        return []
+    except Exception as e:
+        logger.error(f"An unexpected error occurred during Voyager query for synthetic vector: {e}", exc_info=True)
+        return []
+    # --- END: Graceful handling ---
 
     initial_results = [
         {"item_id": id_map.get(voyager_id), "distance": float(dist)}
@@ -357,7 +412,6 @@ def find_nearest_neighbors_by_vector(query_vector: np.ndarray, n: int = 100, eli
         if id_map.get(voyager_id) is not None
     ]
 
-    # Deduplicate results.
     item_ids = [r['item_id'] for r in initial_results]
     item_details = {}
     with db_conn.cursor(cursor_factory=DictCursor) as cur:
@@ -379,7 +433,6 @@ def find_nearest_neighbors_by_vector(query_vector: np.ndarray, n: int = 100, eli
             unique_songs_by_content.append(song)
             added_songs_details.append(current_details)
 
-    # Now, filter by artist count if requested
     if eliminate_duplicates:
         artist_counts = {}
         final_results = []
@@ -430,13 +483,19 @@ def search_tracks_by_title_and_artist(title_query: str, artist_query: str, limit
         query_parts = []
         params = []
         
-        if artist_query:
-            query_parts.append("author ILIKE %s")
-            params.append(f"%{artist_query}%")
-            
-        if title_query:
-            query_parts.append("title ILIKE %s")
-            params.append(f"%{title_query}%")
+        # Handle combined artist and title search in one input
+        if title_query and not artist_query:
+            # Search both title and artist fields with the same query
+            query_parts.append("(title ILIKE %s OR author ILIKE %s)")
+            params.extend([f"%{title_query}%", f"%{title_query}%"])
+        else:
+            if artist_query:
+                query_parts.append("author ILIKE %s")
+                params.append(f"%{artist_query}%")
+                
+            if title_query:
+                query_parts.append("title ILIKE %s")
+                params.append(f"%{title_query}%")
 
         if not query_parts:
             return []
@@ -469,7 +528,6 @@ def create_playlist_from_ids(playlist_name: str, track_ids: list, user_creds: di
     using the provided user credentials.
     """
     try:
-        # Pass the user_creds down to the mediaserver function
         created_playlist = create_instant_playlist(playlist_name, track_ids, user_creds=user_creds)
         
         if not created_playlist:

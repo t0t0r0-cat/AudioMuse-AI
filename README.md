@@ -30,10 +30,9 @@ The **supported architecture** are:
 
 
 And now just some **NEWS:**
+> * Version 0.6.5-beta introduce the **Song Path** feature. Input two song and get a sonic path between them.
 > * Version 0.6.4-beta introdcue **Sonic Fingerprint** turn your listening history in a fingerprint to discover similar sonic songs.
 > * Version 0.6.3-beta introduce **Voyager index** for the similarity function. Raising the recall from 70-80% to 99% for 100 similar song. Also using less memory.
-> * Version 0.6.2-beta introduce the **TOP Playlist Number** parameter for clustering tasks, let's keep only the most diverse playlists! 
-> * From version 0.6.1-beta also [Navidrome](https://www.navidrome.org/) is supported.
 
 ## **Table of Contents**
 
@@ -42,7 +41,8 @@ And now just some **NEWS:**
 - [Front-End Quick Start: Analysis and Clustering Parameters](#front-end-quick-start-analysis-and-clustering-parameters)
 - [Instant Playlist (via Chat Interface)](#instant-playlist-via-chat-interface)
 - [Playlist from Similar song (via similarity Interface)](#playlist-from-similar-song-via-similarity-interface)
-- [Sonic Fingerprint playlist (via sonic_fingerprint Interface](#sonic-fingerprint-playlist-via-sonic_fingerprint-interface)
+- [Sonic Fingerprint playlist (via sonic_fingerprint Interface)](#sonic-fingerprint-playlist-via-sonic_fingerprint-interface)
+- [Song Path playlist (via path Interface)](#song-path-playlist-via-path-interface)
 - [Kubernetes Deployment (K3S Example)](#kubernetes-deployment-k3s-example)
 - [Hardware Requirements](#hardware-requirements)
 - [Configuration Parameters](#configuration-parameters)
@@ -325,6 +325,24 @@ This new functionality analyze your listening history and create your specific s
 6.  **Review and Create:**
     *   Input a name for the playlist and ask the interface to create it directly on Jellyfin or Navidrome. That's it!
 
+## **Song Path playlist (via path Interface)**
+
+**IMPORTANT:** before use this function you need to run the Analysis task first from the normal (async) UI.
+
+This new functionality create a sonic similar path between two song asked from the user.
+
+**How to Use:**
+1.  **Access the Chat Interface:**
+    *   Navigate to `http://<EXTERNAL-IP>:8000/path` (or `http://localhost:8000/path` for local Docker Compose deployments).
+3.  **Input start and end song**
+    *   Insert Artist and Title of both start and end song. When you start input the first 3 char of a title or artist the front-end will give you suggestions.
+4.  **Select the lenght of the path**
+    *  Select the number of song to keep in the path. First and last will be the song that you insert.
+5.  **Run the path search**
+    *   Ask the front-end to generate the path, it will show to you in the table.
+6.  **Review and Create:**
+    *   Input a name for the playlist and ask the interface to create it directly on Jellyfin or Navidrome. That's it!
+
 ## **Kubernetes Deployment (K3S Example)**
 
 The Quick Start provided in the `playlist` namespace the following resources (the same explanetion have sense for both Navidrome and Jellyfin):
@@ -422,6 +440,12 @@ This are the default parameters on wich the analysis or clustering task will be 
 | `SIMILARITY_ELIMINATE_DUPLICATES_DEFAULT` | It enable the possibility of use the `MAX_SONGS_PER_ARTIST` also in similar song  | `true`              |
 | **Sonic Fingerprint General**    |                                                                              |                                      |
 | `SONIC_FINGERPRINT_NEIGHBORS`             | Default number of track for the sonic fingerprint                            | `100`                      |
+| **Song Path General**    |                                                                              |                                      |
+| `PATH_DISTANCE_METRIC`                 | The distance metric to use for pathfinding. Options: 'angular', 'euclidean'| `euclidean`   |
+| `PATH_DEFAULT_LENGTH`                  | Default number of songs in the path if not specified in the API request     | `25`          |
+| `PATH_AVG_JUMP_SAMPLE_SIZE`            | Number of random songs to sample for calculating the average jump distance  | `200`         |
+| `PATH_CANDIDATES_PER_STEP`             | Number of candidate songs to retrieve from Voyager for each step in the path| `25`          |
+| `PATH_LCORE_MULTIPLIER`             | It multiply the number of centroid created based on the distance. Higher is better for distant song and worst for nearest.| `3`          |
 | **Evolutionary Clustering & Scoring**    |                                                                              |                                      |
 | `ITERATIONS_PER_BATCH_JOB`               | Number of clustering iterations processed per RQ batch job.                | `20`                                |
 | `MAX_CONCURRENT_BATCH_JOBS`              | Maximum number of clustering batch jobs to run simultaneously.             | `10`                                  |
@@ -495,9 +519,9 @@ For a quick local setup or for users not using Kubernetes, a `docker-compose.yam
     The `docker-compose.yaml` and `docker-compose-navidrome.yaml` files are pre-configured with default credentials and settings suitable for local testing. You can edit environment variables within this file directly (e.g., `JELLYFIN_URL`, `JELLYFIN_USER_ID`, `JELLYFIN_TOKEN` for **Jellyfin** or `NAVIDROME_URL`, `NAVIDROME_USER` and `NAVIDROME_PASSWORD` for **Navidrome**).
 3.  **Start the Services:**
     ```bash
-    docker compose up -d --scale audiomuse-ai-worker=2
+    docker compose up -d
     ```
-    This command starts all services (Flask app, RQ workers, Redis, PostgreSQL) in detached mode (`-d`). The `--scale audiomuse-ai-worker=2` ensures at least two worker instances are running, which is recommended for the task processing architecture (starting from version **v0.4.0-beta** one worker should be able to handle both main and sub tasks, so a minimum of 1 replica is enough).
+    This command starts all services (Flask app, RQ workers, Redis, PostgreSQL) in detached mode (`-d`).
 4.  **Access the Application:**
     Once the containers are up, you can access the web UI at `http://localhost:8000`.
 5.  **Stopping the Services:**

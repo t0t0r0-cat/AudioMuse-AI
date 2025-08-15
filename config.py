@@ -21,7 +21,7 @@ NAVIDROME_PASSWORD = os.environ.get("NAVIDROME_PASSWORD", "your_navidrome_passwo
 
 
 # --- General Constants (Read from Environment Variables where applicable) ---
-APP_VERSION = "v0.6.4-beta" # Version updated for Sonic Fingerprint
+APP_VERSION = "v0.6.5-beta" # Version updated for Sonic Fingerprint
 MAX_DISTANCE = 0.5
 MAX_SONGS_PER_CLUSTER = 0
 MAX_SONGS_PER_ARTIST = int(os.getenv("MAX_SONGS_PER_ARTIST", "3")) # Max songs per artist in similarity results and clustering
@@ -193,10 +193,22 @@ EMBEDDING_DIMENSION = 200
 
 # --- Voyager Index Constants ---
 INDEX_NAME = os.environ.get("VOYAGER_INDEX_NAME", "music_library") # The primary key for our index in the DB
-VOYAGER_METRIC = os.environ.get("VOYAGER_METRIC", "angular") # Options: 'angular' (Cosine), 'euclidean', 'dot' (InnerProduct)
+VOYAGER_METRIC = os.environ.get("VOYAGER_METRIC", "euclidean") # Options: 'angular' (Cosine), 'euclidean', 'dot' (InnerProduct)
 VOYAGER_EF_CONSTRUCTION = int(os.environ.get("VOYAGER_EF_CONSTRUCTION", "1024"))
 VOYAGER_M = int(os.environ.get("VOYAGER_M", "64"))
 VOYAGER_QUERY_EF = int(os.environ.get("VOYAGER_QUERY_EF", "1024"))
+
+# --- Pathfinding Constants ---
+# The distance metric to use for pathfinding. Options: 'angular', 'euclidean'.
+PATH_DISTANCE_METRIC = os.environ.get("PATH_DISTANCE_METRIC", "euclidean").lower()
+# Default number of songs in the path if not specified in the API request.
+PATH_DEFAULT_LENGTH = int(os.environ.get("PATH_DEFAULT_LENGTH", "25"))
+# Number of random songs to sample for calculating the average jump distance.
+PATH_AVG_JUMP_SAMPLE_SIZE = int(os.environ.get("PATH_AVG_JUMP_SAMPLE_SIZE", "200"))
+# Number of candidate songs to retrieve from Voyager for each step in the path.
+PATH_CANDIDATES_PER_STEP = int(os.environ.get("PATH_CANDIDATES_PER_STEP", "25"))
+# Multiplier for the core number of steps (Lcore) to generate more backbone centroids.
+PATH_LCORE_MULTIPLIER = int(os.environ.get("PATH_LCORE_MULTIPLIER", "3"))
 
 
 # --- Other Essentia Model Paths ---

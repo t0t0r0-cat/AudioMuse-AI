@@ -530,7 +530,7 @@ def get_score_data_by_ids(item_ids_list):
         rows = [] # Return empty list on error
     finally:
         cur.close()
-    return rows
+    return [dict(row) for row in rows]
 
 
 def update_playlist_table(playlists): # Removed db_path
@@ -1192,21 +1192,20 @@ def listen_for_index_reloads():
 if __name__ == '__main__':
     # --- Register Blueprints ---
     # We register blueprints here to avoid circular imports for RQ workers.
-    # --- Register Blueprints ---
     from app_chat import chat_bp
     from app_clustering import clustering_bp
     from app_analysis import analysis_bp
     from app_voyager import voyager_bp
     from app_sonic_fingerprint import sonic_fingerprint_bp
+    from app_path import path_bp # Import the new path blueprint
 
-    # Only chat gets a prefix
+    # Register all blueprints
     app.register_blueprint(chat_bp, url_prefix='/chat')
-
-    # Others are registered at root (no prefix)
     app.register_blueprint(clustering_bp)
     app.register_blueprint(analysis_bp)
     app.register_blueprint(voyager_bp)
     app.register_blueprint(sonic_fingerprint_bp)
+    app.register_blueprint(path_bp) # Register the new path blueprint
     
     os.makedirs(TEMP_DIR, exist_ok=True)
     # This block runs only when the script is executed directly (e.g., `python app.py`)
@@ -1219,13 +1218,6 @@ if __name__ == '__main__':
         load_voyager_index_for_querying()
 
     # --- Start Background Listener Thread ---
-    # This thread will handle live reloads of the Voyager index without needing an API call.
-    # NOTE FOR PRODUCTION: If you use a WSGI server like Gunicorn with multiple workers,
-    # this simple threading model may not be ideal. Each worker would start its own
-    # listener. A more robust production approach would be to use Gunicorn's `post_fork`
-    # server hook to start the listener thread in each worker process, or to use a
-    # more advanced messaging library. For development and single-worker deployments,
-    # this is perfectly fine.
     listener_thread = threading.Thread(target=listen_for_index_reloads, daemon=True)
     listener_thread.start()
 

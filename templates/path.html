@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="app-version" content="{{ app_version }}">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AudioMuse-AI - Song Path</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/menu.css">
+    <style>
+        #path-form button {
+            flex-grow: 1;
+            color: white;
+            font-weight: 700;
+            padding: 0.75rem 1.5rem;
+            border-radius: 0.5rem;
+            border: none;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            width: 100%;
+            font-size: 1rem;
+            margin-top: 1rem;
+            background-color: #2563EB;
+        }
+        #path-form button:hover {
+            background-color: #1D4ED8;
+        }
+    </style>
+</head>
+<body>
+
+<div class="page-container">
+    <aside class="sidebar">
+        <nav>
+            <ul class="sidebar-nav">
+                <!-- Menu items are dynamically inserted by menu.js -->
+            </ul>
+        </nav>
+    </aside>
+
+    <div class="main-content" id="main-content">
+        <button class="menu-toggle">&#9776;</button>
+        <div class="container">
+            <section>
+                <header class="page-header">
+                    <h1>AudioMuse-AI - Song Path</h1>
+                    <p>Find a path of similar songs between two tracks.</p>
+                </header>
+
+                <form id="path-form">
+                    <input type="hidden" id="start_song_id" name="start_song_id">
+                    <input type="hidden" id="end_song_id" name="end_song_id">
+                    
+                    <div class="param-group">
+                        <div class="autocomplete-container">
+                            <label for="start_artist_search">Start Song Artist:</label>
+                            <input type="text" id="start_artist_search" name="start_artist_search" placeholder="Start typing artist name..." autocomplete="off">
+                        </div>
+                        <div class="autocomplete-container">
+                            <label for="start_title_search">Start Song Title:</label>
+                            <input type="text" id="start_title_search" name="start_title_search" placeholder="Start typing track title..." autocomplete="off">
+                            <div id="start-autocomplete-results" class="autocomplete-results hidden"></div>
+                        </div>
+
+                        <div class="autocomplete-container">
+                            <label for="end_artist_search">End Song Artist:</label>
+                            <input type="text" id="end_artist_search" name="end_artist_search" placeholder="Start typing artist name..." autocomplete="off">
+                        </div>
+                        <div class="autocomplete-container">
+                            <label for="end_title_search">End Song Title:</label>
+                            <input type="text" id="end_title_search" name="end_title_search" placeholder="Start typing track title..." autocomplete="off">
+                            <div id="end-autocomplete-results" class="autocomplete-results hidden"></div>
+                        </div>
+
+                        <div>
+                            <label for="max_steps">Max number of songs in path:</label>
+                            <input type="number" id="max_steps" name="max_steps" value="25" min="10" max="200">
+                        </div>
+                    </div>
+                    <button type="submit">Find Path</button>
+                </form>
+            </section>
+
+            <section id="results-container" class="hidden">
+                <h2>Path Result</h2>
+                <div id="status"></div>
+                <div id="results-table-wrapper"></div>
+            </section>
+
+            <section id="playlist-creator" class="hidden">
+                <h3>Create a Playlist from Path</h3>
+                <form id="playlist-form">
+                    <div class="param-group">
+                        <div>
+                           <label for="playlist_name">Playlist Name:</label>
+                           <input type="text" id="playlist_name" name="playlist_name" required placeholder="e.g., Path from Song A to B">
+                        </div>
+                    </div>
+                    <button type="submit" style="background-color: #16A34A;">Create Playlist on Media Server</button>
+                </form>
+                <div id="playlist-status"></div>
+            </section>
+        
+        </div>
+    </div>
+</div>
+    <script>
+        (() => {
+            let currentTrackIds = [];
+            let searchTimeout;
+
+            const pathForm = document.getElementById('path-form');
+            const playlistForm = document.getElementById('playlist-form');
+
+            const startArtistInput = document.getElementById('start_artist_search');
+            const startTitleInput = document.getElementById('start_title_search');
+            const endArtistInput = document.getElementById('end_artist_search');
+            const endTitleInput = document.getElementById('end_title_search');
+
+            const startSongIdInput = document.getElementById('start_song_id');
+            const endSongIdInput = document.getElementById('end_song_id');
+
+            const startAutocompleteResults = document.getElementById('start-autocomplete-results');
+            const endAutocompleteResults = document.getElementById('end-autocomplete-results');
+
+            const resultsContainer = document.getElementById('results-container');
+            const playlistCreator = document.getElementById('playlist-creator');
+            const statusDiv = document.getElementById('status');
+            const resultsTableWrapper = document.getElementById('results-table-wrapper');
+            const playlistStatusDiv = document.getElementById('playlist-status');
+
+            const setupAutocomplete = (artistInputEl, titleInputEl, resultsEl, idEl) => {
+                const handleSearch = async () => {
+                    const artistQuery = artistInputEl.value.trim();
+                    const titleQuery = titleInputEl.value.trim();
+
+                    if (artistQuery.length < 3 && titleQuery.length < 3) {
+                        resultsEl.classList.add('hidden');
+                        return;
+                    }
+
+                    try {
+                        const params = new URLSearchParams({ artist: artistQuery, title: titleQuery });
+                        const response = await fetch(`/api/search_tracks?${params}`);
+                        const tracks = await response.json();
+                        
+                        resultsEl.innerHTML = '';
+                        if (tracks.length === 0) {
+                            resultsEl.innerHTML = '<div class="autocomplete-item"><em>No results found</em></div>';
+                        } else {
+                            tracks.forEach(track => {
+                                const itemDiv = document.createElement('div');
+                                itemDiv.className = 'autocomplete-item';
+                                itemDiv.innerHTML = `<div class="title">${track.title}</div><div class="artist">${track.author}</div>`;
+                                itemDiv.addEventListener('click', () => {
+                                    artistInputEl.value = track.author;
+                                    titleInputEl.value = track.title;
+                                    idEl.value = track.item_id;
+                                    resultsEl.classList.add('hidden');
+                                });
+                                resultsEl.appendChild(itemDiv);
+                            });
+                        }
+                        resultsEl.classList.remove('hidden');
+                    } catch (error) {
+                        console.error('Autocomplete search error:', error);
+                        resultsEl.classList.add('hidden');
+                    }
+                };
+
+                const debouncedSearch = () => {
+                    clearTimeout(searchTimeout);
+                    searchTimeout = setTimeout(handleSearch, 300);
+                };
+
+                artistInputEl.addEventListener('input', debouncedSearch);
+                titleInputEl.addEventListener('input', debouncedSearch);
+            };
+
+            setupAutocomplete(startArtistInput, startTitleInput, startAutocompleteResults, startSongIdInput);
+            setupAutocomplete(endArtistInput, endTitleInput, endAutocompleteResults, endSongIdInput);
+
+            document.addEventListener('click', (e) => {
+                if (!e.target.closest('.autocomplete-container')) {
+                    startAutocompleteResults.classList.add('hidden');
+                    endAutocompleteResults.classList.add('hidden');
+                }
+            });
+
+            pathForm.addEventListener('submit', async function (event) {
+                event.preventDefault();
+
+                const startSongId = startSongIdInput.value;
+                const endSongId = endSongIdInput.value;
+                const maxSteps = document.getElementById('max_steps').value;
+
+                resultsContainer.classList.remove('hidden');
+                playlistCreator.classList.add('hidden');
+                statusDiv.textContent = 'Searching for a path...';
+                statusDiv.className = '';
+                resultsTableWrapper.innerHTML = '';
+
+                if (!startSongId || !endSongId) {
+                    statusDiv.textContent = 'Please select both a start and end song.';
+                    statusDiv.className = 'status-error';
+                    return;
+                }
+
+                try {
+                    const params = new URLSearchParams({
+                        start_song_id: startSongId,
+                        end_song_id: endSongId,
+                        max_steps: maxSteps
+                    });
+                    const response = await fetch(`/api/find_path?${params}`);
+                    
+                    // --- ROBUST ERROR HANDLING ---
+                    if (!response.ok) {
+                        let errorData;
+                        try {
+                            errorData = await response.json();
+                        } catch (e) {
+                            throw new Error(`Server returned an error (HTTP ${response.status})`);
+                        }
+                        throw new Error(errorData.error || `An unknown server error occurred.`);
+                    }
+                    
+                    const data = await response.json();
+                    
+                    if (!data.path || data.path.length <= 1) {
+                        throw new Error("Could not find a valid path between the two songs.");
+                    }
+
+                    const path = data.path;
+                    currentTrackIds = path.map(track => track.item_id);
+
+                    const distanceText = typeof data.total_distance === 'number'
+                        ? `Jump distance: ${data.total_distance.toFixed(4)}`
+                        : 'Distance not available.';
+
+                    statusDiv.textContent = `Found a path with ${path.length} songs. ${distanceText}`;
+                    const tableHTML = `
+                        <table>
+                            <thead>
+                                <tr><th>#</th><th>Title</th><th>Artist</th></tr>
+                            </thead>
+                            <tbody>
+                                ${path.map((track, index) => `
+                                    <tr>
+                                        <td>${index + 1}</td>
+                                        <td>${track.title || 'N/A'}</td>
+                                        <td>${track.author || 'N/A'}</td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>`;
+                    resultsTableWrapper.innerHTML = tableHTML;
+                    playlistCreator.classList.remove('hidden');
+                    playlistStatusDiv.textContent = '';
+                    document.getElementById('playlist_name').value = `Path: ${startTitleInput.value} to ${endTitleInput.value}`;
+
+                } catch (error) {
+                    statusDiv.textContent = `Error: ${error.message}`;
+                    statusDiv.className = 'status-error';
+                    console.error('Fetch error:', error);
+                }
+            });
+
+            playlistForm.addEventListener('submit', async function (event) {
+                event.preventDefault();
+                const playlistName = document.getElementById('playlist_name').value;
+                
+                playlistStatusDiv.className = '';
+                if (!playlistName) {
+                    playlistStatusDiv.textContent = 'Please enter a playlist name.';
+                    playlistStatusDiv.className = 'status-error';
+                    return;
+                }
+                if (currentTrackIds.length === 0) {
+                    playlistStatusDiv.textContent = 'No tracks to add. Please find a path first.';
+                    playlistStatusDiv.className = 'status-error';
+                    return;
+                }
+                playlistStatusDiv.textContent = 'Creating playlist...';
+                
+                try {
+                    const response = await fetch('/api/create_playlist', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            playlist_name: playlistName,
+                            track_ids: currentTrackIds
+                        }),
+                    });
+                    const result = await response.json();
+                    if (!response.ok) throw new Error(result.error || `HTTP error! status: ${response.status}`);
+                    playlistStatusDiv.textContent = result.message;
+                    playlistStatusDiv.className = 'status-success';
+                } catch (error) {
+                    playlistStatusDiv.textContent = `Error: ${error.message}`;
+                    playlistStatusDiv.className = 'status-error';
+                    console.error('Playlist creation error:', error);
+                }
+            });
+        })();
+    </script>
+    <script src="/static/menu.js"></script>
+</body>
+</html>
