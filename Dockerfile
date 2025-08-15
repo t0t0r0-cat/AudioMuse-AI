@@ -97,7 +97,7 @@ RUN wget -q -P /app/model \
 COPY . /app
 
 # Copy the supervisor configuration
-COPY deplyment/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+COPY deployment/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
 ENV PYTHONPATH=/usr/local/lib/python3/dist-packages:/app
 
