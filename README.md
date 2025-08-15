@@ -422,6 +422,11 @@ This are the default parameters on wich the analysis or clustering task will be 
 | `SIMILARITY_ELIMINATE_DUPLICATES_DEFAULT` | It enable the possibility of use the `MAX_SONGS_PER_ARTIST` also in similar song  | `true`              |
 | **Sonic Fingerprint General**    |                                                                              |                                      |
 | `SONIC_FINGERPRINT_NEIGHBORS`             | Default number of track for the sonic fingerprint                            | `100`                      |
+| **Song Path General**    |                                                                              |                                      |
+| `PATH_DISTANCE_METRIC`                 | The distance metric to use for pathfinding. Options: 'angular', 'euclidean'| `euclidean`   |
+| `PATH_DEFAULT_LENGTH`                  | Default number of songs in the path if not specified in the API request     | `25`          |
+| `PATH_AVG_JUMP_SAMPLE_SIZE`            | Number of random songs to sample for calculating the average jump distance  | `200`         |
+| `PATH_CANDIDATES_PER_STEP`             | Number of candidate songs to retrieve from Voyager for each step in the path| `25`          |
 | **Evolutionary Clustering & Scoring**    |                                                                              |                                      |
 | `ITERATIONS_PER_BATCH_JOB`               | Number of clustering iterations processed per RQ batch job.                | `20`                                |
 | `MAX_CONCURRENT_BATCH_JOBS`              | Maximum number of clustering batch jobs to run simultaneously.             | `10`                                  |
