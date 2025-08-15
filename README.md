@@ -326,7 +326,22 @@ This new functionality analyze your listening history and create your specific s
     *   Input a name for the playlist and ask the interface to create it directly on Jellyfin or Navidrome. That's it!
 
 ## **Song Path playlist (via path Interface)**
-placeholder
+
+**IMPORTANT:** before use this function you need to run the Analysis task first from the normal (async) UI.
+
+This new functionality create a sonic similar path between two song asked from the user.
+
+**How to Use:**
+1.  **Access the Chat Interface:**
+    *   Navigate to `http://<EXTERNAL-IP>:8000/path` (or `http://localhost:8000/path` for local Docker Compose deployments).
+3.  **Input start and end song**
+    *   Insert Artist and Title of both start and end song. When you start input the first 3 char of a title or artist the front-end will give you suggestions.
+4.  **Select the lenght of the path**
+    *  Select the number of song to keep in the path. First and last will be the song that you insert.
+5.  **Run the path search**
+    *   Ask the front-end to generate the path, it will show to you in the table.
+6.  **Review and Create:**
+    *   Input a name for the playlist and ask the interface to create it directly on Jellyfin or Navidrome. That's it!
 
 ## **Kubernetes Deployment (K3S Example)**
 
