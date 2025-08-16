@@ -54,9 +54,12 @@ services:
       - postgres
     restart: unless-stopped
 
+
   # AudioMuse-AI RQ Worker service
   audiomuse-ai-worker:
-    image: ghcr.io/neptunehub/audiomuse-ai:0.6.5-beta # Reflects deployment.yaml
+    build:
+      context: ../
+      dockerfile: Dockerfile.gpu
     container_name: audiomuse-ai-worker-instance
     environment:
       SERVICE_TYPE: "worker" # Tells the container to run the RQ worker
@@ -79,7 +82,13 @@ services:
       - redis
       - postgres
     restart: unless-stopped
-
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
 # Define volumes for persistent data and temporary files
 volumes:
   redis-data:
