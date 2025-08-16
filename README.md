@@ -545,16 +545,6 @@ The nvidia version of the worker support the use of GPU on Tensorflow in order t
 
 For the Jellyfin you have the `docker-compose-nidia.yml` ready to use instead of docker-compose.yml. For Navidrome or if you use K3S or other type of deployment we suggest to create your own (basically in the worker you need to change the container image and add the env parameter for the GPU).
 
-Run:
-
-```bash
-docker-compose -f docker-compose-nvidia.yml build
-```
-
-This can take a few minutes as the base image is very large. You can make a cup of tea while you wait.
-
-Once this is complete you will be able to run `docker-compose up -d` as described above.
-
 ## **Local Deployment with Podman Quadlets**
 
 For an alternative local setup, [Podman Quadlet](https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html) files are provided in the `deployment/podman-quadlets` directory for interacting with **Navidrome**. The unit files can  be edited for use with **Jellyfin**. 
