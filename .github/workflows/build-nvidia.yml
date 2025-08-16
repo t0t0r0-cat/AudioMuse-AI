@@ -1,4 +1,4 @@
-name: Build, Test, and Push AudioMuse AI Docker Image
+name: Build, Test, and Push AudioMuse AI Docker Image with NVIDIA support
 
 on:
   push:
