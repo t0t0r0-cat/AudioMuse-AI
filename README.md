@@ -387,6 +387,14 @@ Intel I7 CPU of first gen or older **DON'T WORK** because Tensorflow require AVX
 
 If you tested with CPU older than the suggested requirements, please track this in an issue ticket reporting your feedback.
 
+### (Optional) Experimental Nvidia Support
+
+NVidia GPU support is available for the worker process. This can significantly speed up processing of tracks. 
+
+This has been tested with an NVidia RX 3060 running CUDA 12.9 and Driver V575.64.05. During testing, the worker used up to 10GiB of VRAM but your mileage may vary.
+
+See [Building the Nvidia Worker](#building-nvidia-worker) section for more details.
+
 ## **Configuration Parameters**
 
 These are the parameters accepted for this script. You can pass them as environment variables using, for example, /deployment/deployment.yaml in this repository.
@@ -528,6 +536,21 @@ For a quick local setup or for users not using Kubernetes, a `docker-compose.yam
     ```bash
     docker compose down
     ```
+
+## **Building Nvidia Worker**
+
+To use the nvidia version of the worker, yyou can use the docker-compose-nidia.yml instead of docker-compose.yml. You will need to build the image which can take a few minutes.
+
+Run:
+
+```bash
+docker-compose -f docker-compose-nvidia.yml build
+```
+
+This can take a few minutes as the base image is very large. You can make a cup of tea while you wait.
+
+Once this is complete you will be able to run `docker-compose up -d` as described above.
+
 ## **Docker Image Tagging Strategy**
 
 Our GitHub Actions workflow automatically builds and pushes Docker images. Here's how our tags work:
