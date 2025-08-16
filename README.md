@@ -11,7 +11,7 @@
 
 
 
-AudioMuse-AI is an Open Source Dockerized environment that brings smart playlist generation to [Jellyfin](https://jellyfin.org) and [Navidrome](https://www.navidrome.org/) using sonic audio analysis via  [Librosa](https://github.com/librosa/librosa), [Tensorflow](https://www.tensorflow.org/)  and AI models. All you need is in a container that you can deploy locally or on your Kubernetes cluster (tested on K3S). In this repo you will find deployment example on both Kubernetes and Docker Compose.
+AudioMuse-AI is an Open Source Dockerized environment that brings smart playlist generation to [Jellyfin](https://jellyfin.org) and [Navidrome](https://www.navidrome.org/) using sonic audio analysis via  [Librosa](https://github.com/librosa/librosa), [Tensorflow](https://www.tensorflow.org/)  and AI models. All you need is in a container that you can deploy locally or on your Kubernetes cluster (tested on K3S). In this repo you will find deployment examples for Kubernetes, Podman, and Docker Compose.
 
 
 Addional important information on this project can also be found here:
@@ -47,6 +47,7 @@ And now just some **NEWS:**
 - [Hardware Requirements](#hardware-requirements)
 - [Configuration Parameters](#configuration-parameters)
 - [Local Deployment with Docker Compose](#local-deployment-with-docker-compose)
+- [Local Deployment with Podman Quadlets](#local-deployment-with-podman-quadlets)
 - [Docker Image Tagging Strategy](#docker-image-tagging-strategy)
 - [Workflow Overview](#workflow-overview)
 - [Analysis Algorithm Deep Dive](#analysis-algorithm-deep-dive)
@@ -508,7 +509,7 @@ For a quick local setup or for users not using Kubernetes, a `docker-compose.yam
 **Prerequisites:**
 *   Docker and Docker Compose installed.
 *   `Jellyfin` or `Navidrome` installed.
-*   Respect the HW requirements (look the specific chapter)
+*   Respect the [hardware requirements](#hardware-requirements)
 
 **Steps:**
 1.  **Navigate to the `deployment` directory:**
@@ -528,6 +529,45 @@ For a quick local setup or for users not using Kubernetes, a `docker-compose.yam
     ```bash
     docker compose down
     ```
+
+## **Local Deployment with Podman Quadlets**
+
+For an alternative local setup, [Podman Quadlet](https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html) files are provided in the `deployment/podman-quadlets` directory for interacting with **Navidrome**. The unit files can  be edited for use with **Jellyfin**. 
+
+These files are configured to automatically update AudioMuse-AI using the [latest](#docker-image-tagging-strategy) stable release and should perform an automatic rollback if the updated image fails to start.     
+
+**Prerequisites:**
+*   Podman and systemd.
+*   `Jellyfin` or `Navidrome` installed.
+*   Respect the [hardware requirements](#hardware-requirements)
+
+**Steps:**
+1.  **Navigate to the `deployment/podman-quadlets` directory:**
+    ```bash
+    cd deployment/podman-quadlets
+    ```
+2.  **Review and Customize:**
+
+    The `audiomuse-ai-postgres.container` and `audiomuse-redis.container` files are pre-configured with default credentials and settings suitable for local testing. <BR>
+    You will need to edit environment variables within `audiomuse-ai-worker.container` and `audiomuse-ai-flask.container` files to reflect your personal credentials and environment.
+    * For **Navidrome**, update `NAVIDROME_URL`, `NAVIDROME_USER` and `NAVIDROME_PASSWORD` with your real credentials.  
+    * For **Jellyfin** replace these variables with `JELLYFIN_URL`, `JELLYFIN_USER_ID`, `JELLYFIN_TOKEN`; add your real credentials; and change the `MEDIASERVER_TYPE` to `jellyfin`. 
+
+    Once you've customized the unit files, you will need to copy all of them into a systemd container directory, such as `/etc/containers/systemd/user/`.<BR>
+
+3.  **Start the Services:**
+    ```bash
+    systemctl --user daemon-reload
+    systemctl --user start audiomuse-pod
+    ```
+    The first command reloads systemd (generating the systemd service files) and the second command starts all AudioMuse services (Flask app, RQ worker, Redis, PostgreSQL).
+4.  **Access the Application:**
+    Once the containers are up, you can access the web UI at `http://localhost:8000`.
+5.  **Stopping the Services:**
+    ```bash
+    systemctl --user stop audiomuse-pod
+    ```
+
 ## **Docker Image Tagging Strategy**
 
 Our GitHub Actions workflow automatically builds and pushes Docker images. Here's how our tags work:
