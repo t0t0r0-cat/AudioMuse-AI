@@ -1,6 +1,4 @@
 version: '3.8'
-# Remember to scale the worker to minimum 2
-# docker compose up -d --scale audiomuse-ai-worker=2
 services:
   # Redis service for RQ (task queue)
   redis:
@@ -28,7 +26,7 @@ services:
 
   # AudioMuse-AI Flask application service
   audiomuse-ai-flask:
-    image: ghcr.io/neptunehub/audiomuse-ai:0.6.5-beta # Reflects deployment.yaml
+    image: ghcr.io/neptunehub/audiomuse-ai:latest-nvidia
     container_name: audiomuse-ai-flask-app
     ports:
       - "8000:8000" # Map host port 8000 to container port 8000
@@ -54,12 +52,9 @@ services:
       - postgres
     restart: unless-stopped
 
-
   # AudioMuse-AI RQ Worker service
   audiomuse-ai-worker:
-    build:
-      context: ../
-      dockerfile: Dockerfile.gpu
+    image: ghcr.io/neptunehub/audiomuse-ai:latest-nvidia
     container_name: audiomuse-ai-worker-instance
     environment:
       SERVICE_TYPE: "worker" # Tells the container to run the RQ worker
@@ -89,6 +84,7 @@ services:
             - driver: nvidia
               device_ids: ["0"]
               capabilities: [gpu]
+
 # Define volumes for persistent data and temporary files
 volumes:
   redis-data:
