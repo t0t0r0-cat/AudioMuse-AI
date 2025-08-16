@@ -47,6 +47,7 @@ And now just some **NEWS:**
 - [Hardware Requirements](#hardware-requirements)
 - [Configuration Parameters](#configuration-parameters)
 - [Local Deployment with Docker Compose](#local-deployment-with-docker-compose)
+- [Nvidia Worker](#nvidia-worker)
 - [Local Deployment with Podman Quadlets](#local-deployment-with-podman-quadlets)
 - [Docker Image Tagging Strategy](#docker-image-tagging-strategy)
 - [Workflow Overview](#workflow-overview)
@@ -388,6 +389,14 @@ Intel I7 CPU of first gen or older **DON'T WORK** because Tensorflow require AVX
 
 If you tested with CPU older than the suggested requirements, please track this in an issue ticket reporting your feedback.
 
+### (Optional) Experimental Nvidia Support
+
+NVidia GPU support is available for the worker process. This can significantly speed up processing of tracks. 
+
+This has been tested with an NVidia RX 3060 running CUDA 12.9 and Driver V575.64.05. During testing, the worker used up to 10GiB of VRAM but your mileage may vary.
+
+See [Nvidia Worker](#nvidia-worker) section for more details.
+
 ## **Configuration Parameters**
 
 These are the parameters accepted for this script. You can pass them as environment variables using, for example, /deployment/deployment.yaml in this repository.
@@ -529,6 +538,22 @@ For a quick local setup or for users not using Kubernetes, a `docker-compose.yam
     ```bash
     docker compose down
     ```
+
+## **Nvidia Worker**
+
+The nvidia version of the worker support the use of GPU on Tensorflow in order to have faster analysis. You just need to use the image with the **-nvidia** tag for example `0.6.5-beta-nvidia`
+
+For the Jellyfin you have the `docker-compose-nidia.yml` ready to use instead of docker-compose.yml. For Navidrome or if you use K3S or other type of deployment we suggest to create your own (basically in the worker you need to change the container image and add the env parameter for the GPU).
+
+Run:
+
+```bash
+docker-compose -f docker-compose-nvidia.yml build
+```
+
+This can take a few minutes as the base image is very large. You can make a cup of tea while you wait.
+
+Once this is complete you will be able to run `docker-compose up -d` as described above.
 
 ## **Local Deployment with Podman Quadlets**
 
