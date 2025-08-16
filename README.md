@@ -11,7 +11,7 @@
 
 
 
-AudioMuse-AI is an Open Source Dockerized environment that brings smart playlist generation to [Jellyfin](https://jellyfin.org) and [Navidrome](https://www.navidrome.org/) using sonic audio analysis via  [Librosa](https://github.com/librosa/librosa), [Tensorflow](https://www.tensorflow.org/)  and AI models. All you need is in a container that you can deploy locally or on your Kubernetes cluster (tested on K3S). In this repo you will find deployment example on both Kubernetes and Docker Compose.
+AudioMuse-AI is an Open Source Dockerized environment that brings smart playlist generation to [Jellyfin](https://jellyfin.org) and [Navidrome](https://www.navidrome.org/) using sonic audio analysis via  [Librosa](https://github.com/librosa/librosa), [Tensorflow](https://www.tensorflow.org/)  and AI models. All you need is in a container that you can deploy locally or on your Kubernetes cluster (tested on K3S). In this repo you will find deployment examples for Kubernetes, Podman, and Docker Compose.
 
 
 Addional important information on this project can also be found here:
@@ -47,6 +47,8 @@ And now just some **NEWS:**
 - [Hardware Requirements](#hardware-requirements)
 - [Configuration Parameters](#configuration-parameters)
 - [Local Deployment with Docker Compose](#local-deployment-with-docker-compose)
+- [Nvidia Worker](#nvidia-worker)
+- [Local Deployment with Podman Quadlets](#local-deployment-with-podman-quadlets)
 - [Docker Image Tagging Strategy](#docker-image-tagging-strategy)
 - [Workflow Overview](#workflow-overview)
 - [Analysis Algorithm Deep Dive](#analysis-algorithm-deep-dive)
@@ -393,7 +395,7 @@ NVidia GPU support is available for the worker process. This can significantly s
 
 This has been tested with an NVidia RX 3060 running CUDA 12.9 and Driver V575.64.05. During testing, the worker used up to 10GiB of VRAM but your mileage may vary.
 
-See [Building the Nvidia Worker](#building-nvidia-worker) section for more details.
+See [Nvidia Worker](#nvidia-worker) section for more details.
 
 ## **Configuration Parameters**
 
@@ -516,7 +518,7 @@ For a quick local setup or for users not using Kubernetes, a `docker-compose.yam
 **Prerequisites:**
 *   Docker and Docker Compose installed.
 *   `Jellyfin` or `Navidrome` installed.
-*   Respect the HW requirements (look the specific chapter)
+*   Respect the [hardware requirements](#hardware-requirements)
 
 **Steps:**
 1.  **Navigate to the `deployment` directory:**
@@ -537,9 +539,11 @@ For a quick local setup or for users not using Kubernetes, a `docker-compose.yam
     docker compose down
     ```
 
-## **Building Nvidia Worker**
+## **Nvidia Worker**
 
-To use the nvidia version of the worker, yyou can use the docker-compose-nidia.yml instead of docker-compose.yml. You will need to build the image which can take a few minutes.
+The nvidia version of the worker support the use of GPU on Tensorflow in order to have faster analysis. You just need to use the image with the **-nvidia** tag for example `0.6.5-beta-nvidia`
+
+For the Jellyfin you have the `docker-compose-nidia.yml` ready to use instead of docker-compose.yml. For Navidrome or if you use K3S or other type of deployment we suggest to create your own (basically in the worker you need to change the container image and add the env parameter for the GPU).
 
 Run:
 
@@ -550,6 +554,44 @@ docker-compose -f docker-compose-nvidia.yml build
 This can take a few minutes as the base image is very large. You can make a cup of tea while you wait.
 
 Once this is complete you will be able to run `docker-compose up -d` as described above.
+
+## **Local Deployment with Podman Quadlets**
+
+For an alternative local setup, [Podman Quadlet](https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html) files are provided in the `deployment/podman-quadlets` directory for interacting with **Navidrome**. The unit files can  be edited for use with **Jellyfin**. 
+
+These files are configured to automatically update AudioMuse-AI using the [latest](#docker-image-tagging-strategy) stable release and should perform an automatic rollback if the updated image fails to start.     
+
+**Prerequisites:**
+*   Podman and systemd.
+*   `Jellyfin` or `Navidrome` installed.
+*   Respect the [hardware requirements](#hardware-requirements)
+
+**Steps:**
+1.  **Navigate to the `deployment/podman-quadlets` directory:**
+    ```bash
+    cd deployment/podman-quadlets
+    ```
+2.  **Review and Customize:**
+
+    The `audiomuse-ai-postgres.container` and `audiomuse-redis.container` files are pre-configured with default credentials and settings suitable for local testing. <BR>
+    You will need to edit environment variables within `audiomuse-ai-worker.container` and `audiomuse-ai-flask.container` files to reflect your personal credentials and environment.
+    * For **Navidrome**, update `NAVIDROME_URL`, `NAVIDROME_USER` and `NAVIDROME_PASSWORD` with your real credentials.  
+    * For **Jellyfin** replace these variables with `JELLYFIN_URL`, `JELLYFIN_USER_ID`, `JELLYFIN_TOKEN`; add your real credentials; and change the `MEDIASERVER_TYPE` to `jellyfin`. 
+
+    Once you've customized the unit files, you will need to copy all of them into a systemd container directory, such as `/etc/containers/systemd/user/`.<BR>
+
+3.  **Start the Services:**
+    ```bash
+    systemctl --user daemon-reload
+    systemctl --user start audiomuse-pod
+    ```
+    The first command reloads systemd (generating the systemd service files) and the second command starts all AudioMuse services (Flask app, RQ worker, Redis, PostgreSQL).
+4.  **Access the Application:**
+    Once the containers are up, you can access the web UI at `http://localhost:8000`.
+5.  **Stopping the Services:**
+    ```bash
+    systemctl --user stop audiomuse-pod
+    ```
 
 ## **Docker Image Tagging Strategy**
 
