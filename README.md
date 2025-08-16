@@ -543,7 +543,7 @@ For a quick local setup or for users not using Kubernetes, a `docker-compose.yam
 
 The nvidia version of the worker support the use of GPU on Tensorflow in order to have faster analysis. You just need to use the image with the **-nvidia** tag for example `0.6.5-beta-nvidia`
 
-For the Jellyfin you have the `docker-compose-nidia.yml` ready to use instead of docker-compose.yml. For Navidrome or if you use K3S or other type of deployment we suggest to create your own (basically in the worker you need to change the container image and add the env parameter for the GPU).
+For the Jellyfin you have the `docker-compose-nvidia.yml` ready to use instead of docker-compose.yml. For Navidrome or if you use K3S or other type of deployment we suggest to create your own (basically in the worker you need to change the container image and add the env parameter for the GPU).
 
 ## **Local Deployment with Podman Quadlets**
 
