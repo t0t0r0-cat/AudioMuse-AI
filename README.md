@@ -1,6 +1,6 @@
 ![GitHub license](https://img.shields.io/github/license/neptunehub/AudioMuse-AI.svg)
 ![Latest Tag](https://img.shields.io/github/v/tag/neptunehub/AudioMuse-AI?label=latest-tag)
-![Media Server Support: Jellyfin 10.10.7, Navidrome 0.58.0](https://img.shields.io/badge/Media%20Server-Jellyfin%2010.10.7%2C%20Navidrome%200.58.0-blue?style=flat-square&logo=server&logoColor=white)
+![Media Server Support: Jellyfin 10.10.7, Navidrome 0.58.0, LMS v3.69.0](https://img.shields.io/badge/Media%20Server-Jellyfin%2010.10.7%2C%20Navidrome%200.58.0%2C%20LMS%20v3.69.0-blue?style=flat-square&logo=server&logoColor=white)
 
 
 # **AudioMuse-AI - Let the choice happen, the open-source way** 
@@ -13,6 +13,7 @@
 
 AudioMuse-AI is an Open Source Dockerized environment that brings smart playlist generation to [Jellyfin](https://jellyfin.org) and [Navidrome](https://www.navidrome.org/) using sonic audio analysis via  [Librosa](https://github.com/librosa/librosa), [Tensorflow](https://www.tensorflow.org/)  and AI models. All you need is in a container that you can deploy locally or on your Kubernetes cluster (tested on K3S). In this repo you will find deployment examples for Kubernetes, Podman, and Docker Compose.
 
+With Navidrome we support Subsonic API, so additional Mediaserver with Subsonic APi will work like [LMS](https://github.com/epoupon/lms/tree/master). For them just refear to the instruction for Navidrome.
 
 Addional important information on this project can also be found here:
 * Mkdocs version of this README.md for better visualizzation: [Neptunehub AudioMuse-AI DOCS](https://neptunehub.github.io/AudioMuse-AI/)
@@ -168,6 +169,8 @@ For the full list of supported configuration values, refer to the [values.yaml f
 
 For detailed documentation on each environment variable, have a look at the parameter chapter.
 
+**Note:** 
+  > The same instruction used for Navidrome could apply to other Mediaserver that support Subsonic API. LMS for example is supported, only remember to user the Subsonic API token instead of the password.
 
 ## **Quick Start Deployment on K3S**
 
@@ -210,7 +213,9 @@ In case you want to deploy AudioMuse-AI on K3S but interacting with Navidrome th
         *   **ConfigMap (`audiomuse-ai-config`):**
             *   Update `NAVIDROME_URL`.
             *   Ensure `POSTGRES_HOST`, `POSTGRES_PORT`, and `REDIS_URL` are correct for your setup (defaults are for in-cluster services).
-
+            *   
+**Note:** 
+  > The same instruction used for Navidrome could apply to other Mediaserver that support Subsonic API. LMS for example is supported, only remember to user the Subsonic API token instead of the password.
 
 ## **Front-End Quick Start: Analysis and Clustering Parameters**
 
@@ -513,7 +518,7 @@ This are the default parameters on wich the analysis or clustering task will be 
 
 ## **Local Deployment with Docker Compose**
 
-For a quick local setup or for users not using Kubernetes, a `docker-compose.yaml` file is provided in the `deployment/` directory for interacting with **Jellyfin**. `docker-compose-navidrome.yaml` is instead pre-compiled to interact with **Navidrome**.
+For a quick local setup or for users not using Kubernetes, a `docker-compose.yaml` file is provided in the `deployment/` directory for interacting with **Jellyfin**. `docker-compose-navidrome.yaml` is instead pre-compiled to interact with **Navidrome** or other Subsonic API based Mediaserver.
 
 **Prerequisites:**
 *   Docker and Docker Compose installed.
@@ -538,6 +543,9 @@ For a quick local setup or for users not using Kubernetes, a `docker-compose.yam
     ```bash
     docker compose down
     ```
+
+**Note:**
+  > If you use LMS instead of the password you need to create and use the Subsonic API token. Additional Subsonic API based Mediaserver could require it in place of the password.
 
 ## **Nvidia Worker**
 
