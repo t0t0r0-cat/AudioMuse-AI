@@ -42,6 +42,12 @@ from .clustering_helper import (
     _perform_single_clustering_iteration
 )
 
+# we want to maintain np.float_ for backwards compatibility but it was removed in numpy 2.0
+# the check below in sanitize_for_json causes an AttributeError that crashes the clustering algo
+# since it tries to access np.float_ so we monkeypatch np.float_ to point to np.float64
+if not np.__dict__.get('float_'):
+    np.float_ = np.float64
+
 logger = logging.getLogger(__name__)
 
 def _sanitize_for_json(obj):
