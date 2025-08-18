@@ -549,7 +549,7 @@ For a quick local setup or for users not using Kubernetes, a `docker-compose.yam
 
 ## **Nvidia Worker**
 
-The nvidia version of the worker support the use of GPU on Tensorflow in order to have faster analysis. You just need to use the image with the **-nvidia** tag for example `0.6.5-beta-nvidia`
+The nvidia **experimental** version of the worker support the use of GPU on Tensorflow in order to have faster analysis. You just need to use the image with the **-nvidia** tag for example `0.6.5-beta-nvidia`
 
 For the Jellyfin you have the `docker-compose-nvidia.yml` ready to use instead of docker-compose.yml. For Navidrome or if you use K3S or other type of deployment we suggest to create your own (basically in the worker you need to change the container image and add the env parameter for the GPU).
 
@@ -610,6 +610,8 @@ Our GitHub Actions workflow automatically builds and pushes Docker images. Here'
  
 Starting from v0.6.0-beta Librosa library is used for reading song in place of Essentia. We will keep the analysis version with essentia adding the suffix **-esstentia** to the tabg for retrocompatibility.
 This **-essentia** version will **not** receive additional implementation or fix on the analysis side BUT it **may** receive the other implementation. This version will be also less tested so avoid it if you don't have any specific reasion to use AudioMuse-AI implementation with essentia.
+
+**IMPORTANT** the `-nvidia` image are **experimantal** image. Try it if you want to help us to improve BUT we suggest to don't use it for normal daily use for now. 
 
 
 **Important version**
