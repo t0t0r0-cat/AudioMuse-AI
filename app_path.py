@@ -3,6 +3,7 @@ from flask import Blueprint, jsonify, request, render_template
 import logging
 from tasks.path_manager import find_path_between_songs
 from config import PATH_DEFAULT_LENGTH
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,21 @@ def find_path_endpoint():
 
         if not path:
             return jsonify({"error": f"No path found between the selected songs within {max_steps} steps."}), 404
+
+        # --- CHANGED: Process embedding vectors for JSON response ---
+        for song in path:
+            # The raw 'embedding' is a memoryview/bytes object and is not JSON serializable.
+            # We remove it as the frontend will use 'embedding_vector'.
+            if 'embedding' in song:
+                del song['embedding']
+
+            # Convert numpy array 'embedding_vector' to a plain list if it exists
+            if 'embedding_vector' in song and isinstance(song['embedding_vector'], np.ndarray):
+                song['embedding_vector'] = song['embedding_vector'].tolist()
+            else:
+                # Ensure the key exists even if there's no vector, for frontend consistency
+                song['embedding_vector'] = []
+
 
         return jsonify({
             "path": path,

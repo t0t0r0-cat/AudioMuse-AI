@@ -25,6 +25,29 @@
         #path-form button:hover {
             background-color: #1D4ED8;
         }
+        /* Styles for the new view switcher buttons */
+        .graph-view-switcher {
+            margin-bottom: 1rem;
+            text-align: center;
+        }
+        .graph-view-switcher button {
+            background-color: #FFFFFF;
+            color: #374151;
+            border: 1px solid #D1D5DB;
+            padding: 0.5rem 1rem;
+            border-radius: 0.375rem;
+            cursor: pointer;
+            font-weight: 500;
+            transition: background-color 0.2s, color 0.2s, border-color 0.2s;
+        }
+        .graph-view-switcher button.active {
+            background-color: #2563EB;
+            color: #FFFFFF;
+            border-color: #2563EB;
+        }
+        .graph-view-switcher button:not(.active):hover {
+            background-color: #F9FAFB;
+        }
     </style>
 </head>
 <body>
@@ -84,6 +107,13 @@
             <section id="results-container" class="hidden">
                 <h2>Path Result</h2>
                 <div id="status"></div>
+                <div id="graph-container" class="hidden" style="margin-bottom: 2rem;">
+                    <div class="graph-view-switcher">
+                        <button id="view-range-btn" class="active">Range View</button>
+                        <button id="view-diff-btn">Difference View</button>
+                    </div>
+                    <canvas id="path-graph"></canvas>
+                </div>
                 <div id="results-table-wrapper"></div>
             </section>
 
@@ -104,46 +134,46 @@
         </div>
     </div>
 </div>
+    <script src="/static/chart.js"></script>
     <script>
         (() => {
             let currentTrackIds = [];
             let searchTimeout;
+            let pathChart = null;
+            let currentPathData = [];
 
             const pathForm = document.getElementById('path-form');
             const playlistForm = document.getElementById('playlist-form');
-
             const startArtistInput = document.getElementById('start_artist_search');
             const startTitleInput = document.getElementById('start_title_search');
             const endArtistInput = document.getElementById('end_artist_search');
             const endTitleInput = document.getElementById('end_title_search');
-
             const startSongIdInput = document.getElementById('start_song_id');
             const endSongIdInput = document.getElementById('end_song_id');
-
             const startAutocompleteResults = document.getElementById('start-autocomplete-results');
             const endAutocompleteResults = document.getElementById('end-autocomplete-results');
-
             const resultsContainer = document.getElementById('results-container');
             const playlistCreator = document.getElementById('playlist-creator');
             const statusDiv = document.getElementById('status');
             const resultsTableWrapper = document.getElementById('results-table-wrapper');
             const playlistStatusDiv = document.getElementById('playlist-status');
+            const graphContainer = document.getElementById('graph-container');
+            const pathGraphCanvas = document.getElementById('path-graph');
+            const viewRangeBtn = document.getElementById('view-range-btn');
+            const viewDiffBtn = document.getElementById('view-diff-btn');
 
             const setupAutocomplete = (artistInputEl, titleInputEl, resultsEl, idEl) => {
                 const handleSearch = async () => {
                     const artistQuery = artistInputEl.value.trim();
                     const titleQuery = titleInputEl.value.trim();
-
                     if (artistQuery.length < 3 && titleQuery.length < 3) {
                         resultsEl.classList.add('hidden');
                         return;
                     }
-
                     try {
                         const params = new URLSearchParams({ artist: artistQuery, title: titleQuery });
                         const response = await fetch(`/api/search_tracks?${params}`);
                         const tracks = await response.json();
-                        
                         resultsEl.innerHTML = '';
                         if (tracks.length === 0) {
                             resultsEl.innerHTML = '<div class="autocomplete-item"><em>No results found</em></div>';
@@ -167,12 +197,10 @@
                         resultsEl.classList.add('hidden');
                     }
                 };
-
                 const debouncedSearch = () => {
                     clearTimeout(searchTimeout);
                     searchTimeout = setTimeout(handleSearch, 300);
                 };
-
                 artistInputEl.addEventListener('input', debouncedSearch);
                 titleInputEl.addEventListener('input', debouncedSearch);
             };
@@ -187,15 +215,168 @@
                 }
             });
 
+            const renderRangeChart = (pathData) => {
+                const vectorLength = pathData[0].embedding_vector.length;
+                const minValues = new Array(vectorLength).fill(Infinity);
+                const maxValues = new Array(vectorLength).fill(-Infinity);
+
+                for (const track of pathData) {
+                    const vector = track.embedding_vector;
+                    for (let i = 0; i < vectorLength; i++) {
+                        if (vector[i] < minValues[i]) minValues[i] = vector[i];
+                        if (vector[i] > maxValues[i]) maxValues[i] = vector[i];
+                    }
+                }
+                
+                const labels = Array.from({ length: vectorLength }, (_, i) => `${i + 1}`);
+
+                return {
+                    type: 'line',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: 'Max Value',
+                            data: maxValues,
+                            borderColor: 'rgba(255, 99, 132, 0.8)',
+                            borderWidth: 1.5,
+                            pointRadius: 0,
+                        }, {
+                            label: 'Min Value',
+                            data: minValues,
+                            borderColor: 'rgba(54, 162, 235, 0.8)',
+                            backgroundColor: 'rgba(150, 180, 255, 0.3)',
+                            borderWidth: 1.5,
+                            pointRadius: 0,
+                            fill: '-1',
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: true,
+                        plugins: {
+                            legend: { position: 'top' },
+                            title: { display: true, text: 'Variance of Sonic Features Across Path' },
+                            tooltip: {
+                                mode: 'index',
+                                intersect: false,
+                                callbacks: {
+                                    title: (tooltipItems) => `Feature Dimension: ${tooltipItems[0].label}`,
+                                    label: (context) => {
+                                        const label = context.dataset.label || '';
+                                        const value = context.parsed.y;
+                                        const featureIndex = context.dataIndex;
+                                        const range = maxValues[featureIndex] - minValues[featureIndex];
+                                        if (context.datasetIndex === 1) {
+                                            return `${label}: ${value.toFixed(4)} (Range: ${range.toFixed(4)})`;
+                                        }
+                                        return `${label}: ${value.toFixed(4)}`;
+                                    }
+                                }
+                            },
+                        },
+                        scales: {
+                            y: { title: { display: true, text: 'Feature Intensity' } },
+                            x: {
+                                title: { display: true, text: 'Feature Dimension' },
+                                ticks: { autoSkip: true, maxTicksLimit: 20 }
+                            }
+                        }
+                    }
+                };
+            };
+
+            const renderDifferenceChart = (pathData) => {
+                const vectorLength = pathData[0].embedding_vector.length;
+                const differences = new Array(vectorLength).fill(0);
+
+                for (let i = 0; i < vectorLength; i++) {
+                    let min = Infinity, max = -Infinity;
+                    for (const track of pathData) {
+                        const val = track.embedding_vector[i];
+                        if (val < min) min = val;
+                        if (val > max) max = val;
+                    }
+                    differences[i] = max - min;
+                }
+
+                const averageDifference = differences.reduce((a, b) => a + b, 0) / differences.length;
+                const labels = Array.from({ length: vectorLength }, (_, i) => `${i + 1}`);
+
+                return {
+                    type: 'bar',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: 'Difference (Max - Min)',
+                            data: differences,
+                            backgroundColor: 'rgba(255, 159, 64, 0.6)',
+                            borderColor: 'rgba(255, 159, 64, 1)',
+                            borderWidth: 1
+                        },
+                        {
+                            type: 'line',
+                            label: 'Average Difference',
+                            data: Array(vectorLength).fill(averageDifference),
+                            borderColor: 'rgb(75, 192, 192)',
+                            borderWidth: 2,
+                            pointRadius: 0,
+                            borderDash: [5, 5],
+                            fill: false,
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: true,
+                        plugins: {
+                            legend: { display: true },
+                            title: { display: true, text: 'Absolute Difference in Features Across Path' },
+                            tooltip: {
+                                mode: 'index',
+                                intersect: false,
+                                callbacks: {
+                                    title: (tooltipItems) => `Feature Dimension: ${tooltipItems[0].label}`,
+                                }
+                            },
+                        },
+                        scales: {
+                            y: { title: { display: true, text: 'Absolute Difference' } },
+                            x: {
+                                title: { display: true, text: 'Feature Dimension' },
+                                ticks: { autoSkip: true, maxTicksLimit: 20 }
+                            }
+                        }
+                    }
+                };
+            };
+            
+            const renderPathGraph = (view = 'range') => {
+                if (pathChart) {
+                    pathChart.destroy();
+                }
+                if (currentPathData.length === 0) return;
+
+                const chartConfig = view === 'range' 
+                    ? renderRangeChart(currentPathData) 
+                    : renderDifferenceChart(currentPathData);
+                
+                pathChart = new Chart(pathGraphCanvas.getContext('2d'), chartConfig);
+
+                viewRangeBtn.classList.toggle('active', view === 'range');
+                viewDiffBtn.classList.toggle('active', view === 'difference');
+            };
+
+            viewRangeBtn.addEventListener('click', () => renderPathGraph('range'));
+            viewDiffBtn.addEventListener('click', () => renderPathGraph('difference'));
+
             pathForm.addEventListener('submit', async function (event) {
                 event.preventDefault();
-
                 const startSongId = startSongIdInput.value;
                 const endSongId = endSongIdInput.value;
                 const maxSteps = document.getElementById('max_steps').value;
 
                 resultsContainer.classList.remove('hidden');
                 playlistCreator.classList.add('hidden');
+                graphContainer.classList.add('hidden');
                 statusDiv.textContent = 'Searching for a path...';
                 statusDiv.className = '';
                 resultsTableWrapper.innerHTML = '';
@@ -213,39 +394,46 @@
                         max_steps: maxSteps
                     });
                     const response = await fetch(`/api/find_path?${params}`);
-                    
-                    // --- ROBUST ERROR HANDLING ---
                     if (!response.ok) {
                         let errorData;
-                        try {
-                            errorData = await response.json();
-                        } catch (e) {
-                            throw new Error(`Server returned an error (HTTP ${response.status})`);
-                        }
+                        try { errorData = await response.json(); } 
+                        catch (e) { throw new Error(`Server returned an error (HTTP ${response.status})`); }
                         throw new Error(errorData.error || `An unknown server error occurred.`);
                     }
-                    
                     const data = await response.json();
-                    
                     if (!data.path || data.path.length <= 1) {
                         throw new Error("Could not find a valid path between the two songs.");
                     }
 
-                    const path = data.path;
-                    currentTrackIds = path.map(track => track.item_id);
+                    currentPathData = data.path;
+                    currentTrackIds = currentPathData.map(track => track.item_id);
 
-                    const distanceText = typeof data.total_distance === 'number'
-                        ? `Jump distance: ${data.total_distance.toFixed(4)}`
-                        : 'Distance not available.';
+                    if (currentPathData.every(track => track.embedding_vector && track.embedding_vector.length > 0)) {
+                        renderPathGraph('range');
+                        graphContainer.classList.remove('hidden');
+                    } else {
+                        console.warn("Graph not rendered because songs are missing embedding vectors.");
+                    }
+                    
+                    const totalVariance = currentPathData[0].embedding_vector.reduce((sum, _, i) => {
+                        let min = Infinity, max = -Infinity;
+                        currentPathData.forEach(track => {
+                            if (track.embedding_vector[i] < min) min = track.embedding_vector[i];
+                            if (track.embedding_vector[i] > max) max = track.embedding_vector[i];
+                        });
+                        return sum + (max - min);
+                    }, 0);
 
-                    statusDiv.textContent = `Found a path with ${path.length} songs. ${distanceText}`;
+                    const summaryText = `Found a path with ${currentPathData.length} songs. Path Variance Score: ${totalVariance.toFixed(4)}`;
+                    statusDiv.textContent = summaryText;
+
                     const tableHTML = `
                         <table>
                             <thead>
                                 <tr><th>#</th><th>Title</th><th>Artist</th></tr>
                             </thead>
                             <tbody>
-                                ${path.map((track, index) => `
+                                ${currentPathData.map((track, index) => `
                                     <tr>
                                         <td>${index + 1}</td>
                                         <td>${track.title || 'N/A'}</td>
@@ -255,10 +443,10 @@
                             </tbody>
                         </table>`;
                     resultsTableWrapper.innerHTML = tableHTML;
+
                     playlistCreator.classList.remove('hidden');
                     playlistStatusDiv.textContent = '';
                     document.getElementById('playlist_name').value = `Path: ${startTitleInput.value} to ${endTitleInput.value}`;
-
                 } catch (error) {
                     statusDiv.textContent = `Error: ${error.message}`;
                     statusDiv.className = 'status-error';
@@ -269,7 +457,6 @@
             playlistForm.addEventListener('submit', async function (event) {
                 event.preventDefault();
                 const playlistName = document.getElementById('playlist_name').value;
-                
                 playlistStatusDiv.className = '';
                 if (!playlistName) {
                     playlistStatusDiv.textContent = 'Please enter a playlist name.';
@@ -282,7 +469,6 @@
                     return;
                 }
                 playlistStatusDiv.textContent = 'Creating playlist...';
-                
                 try {
                     const response = await fetch('/api/create_playlist', {
                         method: 'POST',

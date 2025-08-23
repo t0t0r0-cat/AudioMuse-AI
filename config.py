@@ -208,7 +208,7 @@ PATH_AVG_JUMP_SAMPLE_SIZE = int(os.environ.get("PATH_AVG_JUMP_SAMPLE_SIZE", "200
 # Number of candidate songs to retrieve from Voyager for each step in the path.
 PATH_CANDIDATES_PER_STEP = int(os.environ.get("PATH_CANDIDATES_PER_STEP", "25"))
 # Multiplier for the core number of steps (Lcore) to generate more backbone centroids.
-PATH_LCORE_MULTIPLIER = int(os.environ.get("PATH_LCORE_MULTIPLIER", "3"))
+PATH_LCORE_MULTIPLIER = int(os.environ.get("PATH_LCORE_MULTIPLIER", "1"))
 
 
 # --- Other Essentia Model Paths ---
