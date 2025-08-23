@@ -25,7 +25,6 @@
         #path-form button:hover {
             background-color: #1D4ED8;
         }
-        /* Styles for the new view switcher buttons */
         .graph-view-switcher {
             margin-bottom: 1rem;
             text-align: center;
@@ -47,6 +46,12 @@
         }
         .graph-view-switcher button:not(.active):hover {
             background-color: #F9FAFB;
+        }
+        .graph-view-switcher button:disabled {
+            background-color: #E5E7EB;
+            color: #9CA3AF;
+            cursor: not-allowed;
+            border-color: #D1D5DB;
         }
     </style>
 </head>
@@ -109,8 +114,9 @@
                 <div id="status"></div>
                 <div id="graph-container" class="hidden" style="margin-bottom: 2rem;">
                     <div class="graph-view-switcher">
-                        <button id="view-range-btn" class="active">Range View</button>
-                        <button id="view-diff-btn">Difference View</button>
+                        <button id="view-progression-btn" class="active">Path Progression</button>
+                        <button id="view-range-btn">Feature Range</button>
+                        <button id="view-diff-btn">Feature Difference</button>
                     </div>
                     <canvas id="path-graph"></canvas>
                 </div>
@@ -136,11 +142,22 @@
 </div>
     <script src="/static/chart.js"></script>
     <script>
-        (() => {
+        (async () => {
             let currentTrackIds = [];
             let searchTimeout;
             let pathChart = null;
             let currentPathData = [];
+            let pathDistanceMetric = 'euclidean'; // Default value
+
+            // --- Fetch config to get the distance metric ---
+            try {
+                const response = await fetch('/api/config');
+                const config = await response.json();
+                pathDistanceMetric = config.path_distance_metric || 'euclidean';
+                console.log(`Using '${pathDistanceMetric}' distance metric for path progression chart.`);
+            } catch (error) {
+                console.error('Failed to fetch config, defaulting to euclidean distance:', error);
+            }
 
             const pathForm = document.getElementById('path-form');
             const playlistForm = document.getElementById('playlist-form');
@@ -159,6 +176,8 @@
             const playlistStatusDiv = document.getElementById('playlist-status');
             const graphContainer = document.getElementById('graph-container');
             const pathGraphCanvas = document.getElementById('path-graph');
+
+            const viewProgressionBtn = document.getElementById('view-progression-btn');
             const viewRangeBtn = document.getElementById('view-range-btn');
             const viewDiffBtn = document.getElementById('view-diff-btn');
 
@@ -214,6 +233,125 @@
                     endAutocompleteResults.classList.add('hidden');
                 }
             });
+
+            // --- Distance Calculation Functions ---
+            const getEuclideanDistance = (v1, v2) => {
+                if (!v1 || !v2 || v1.length !== v2.length) return Infinity;
+                let sum = 0;
+                for (let i = 0; i < v1.length; i++) {
+                    sum += (v1[i] - v2[i]) ** 2;
+                }
+                return Math.sqrt(sum);
+            };
+            
+            const dot = (v1, v2) => v1.reduce((acc, val, i) => acc + val * v2[i], 0);
+            const magnitude = (v) => Math.sqrt(v.reduce((acc, val) => acc + val * val, 0));
+            const getAngularDistance = (v1, v2) => {
+                if (!v1 || !v2 || v1.length === 0 || v2.length === 0) return Infinity;
+                const mag1 = magnitude(v1);
+                const mag2 = magnitude(v2);
+                if (mag1 === 0 || mag2 === 0) return Infinity;
+                const cosineSimilarity = dot(v1, v2) / (mag1 * mag2);
+                const clampedCosine = Math.max(-1, Math.min(1, cosineSimilarity));
+                return Math.acos(clampedCosine) / Math.PI;
+            };
+
+            const getDistance = (v1, v2) => {
+                if (pathDistanceMetric === 'angular') {
+                    return getAngularDistance(v1, v2);
+                }
+                return getEuclideanDistance(v1, v2);
+            };
+            
+            // --- Chart Renderers ---
+            const renderProgressionChart = (pathData) => {
+                const labels = pathData.map((track, index) => `${index + 1}: ${track.title.substring(0, 20)}...`);
+                const startVector = pathData[0].embedding_vector;
+                const endVector = pathData[pathData.length - 1].embedding_vector;
+
+                const distanceFromStart = pathData.map(track => getDistance(startVector, track.embedding_vector));
+                const distanceToEnd = pathData.map(track => getDistance(endVector, track.embedding_vector));
+                const stepToStepDistance = pathData.map((track, i) => {
+                    if (i === pathData.length - 1) return 0;
+                    return getDistance(track.embedding_vector, pathData[i + 1].embedding_vector);
+                });
+                const metricName = pathDistanceMetric.charAt(0).toUpperCase() + pathDistanceMetric.slice(1);
+
+                return {
+                    type: 'bar',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            type: 'line',
+                            label: 'Distance from Start',
+                            data: distanceFromStart,
+                            borderColor: 'rgba(54, 162, 235, 1)',
+                            backgroundColor: 'rgba(54, 162, 235, 0.2)',
+                            fill: false,
+                            tension: 0.1,
+                            pointRadius: 3,
+                            yAxisID: 'yDistance',
+                        }, {
+                            type: 'line',
+                            label: 'Distance to End',
+                            data: distanceToEnd,
+                            borderColor: 'rgba(255, 99, 132, 1)',
+                            backgroundColor: 'rgba(255, 99, 132, 0.2)',
+                            fill: false,
+                            tension: 0.1,
+                            pointRadius: 3,
+                            yAxisID: 'yDistance',
+                        }, {
+                            type: 'bar',
+                            label: 'Step-to-Step Jump',
+                            data: stepToStepDistance,
+                            backgroundColor: 'rgba(75, 192, 192, 0.5)',
+                            borderColor: 'rgba(75, 192, 192, 1)',
+                            borderWidth: 1,
+                            yAxisID: 'yStep',
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: true,
+                        plugins: {
+                            legend: { position: 'top' },
+                            title: { display: true, text: 'Progression of Sonic Distance Along the Path' },
+                            tooltip: {
+                                mode: 'index',
+                                intersect: false,
+                                callbacks: {
+                                    title: (tooltipItems) => {
+                                        const index = tooltipItems[0].dataIndex;
+                                        return `${index + 1}: ${currentPathData[index].title} by ${currentPathData[index].author}`;
+                                    }
+                                }
+                            },
+                        },
+                        scales: {
+                            x: {
+                                title: { display: true, text: 'Path Step' },
+                                ticks: {
+                                    callback: function(value, index) { return index + 1; }
+                                }
+                            },
+                            yDistance: {
+                                type: 'linear',
+                                position: 'left',
+                                title: { display: true, text: `${metricName} Distance from Start/End` },
+                                beginAtZero: true,
+                            },
+                            yStep: {
+                                type: 'linear',
+                                position: 'right',
+                                title: { display: true, text: 'Step Jump Distance' },
+                                beginAtZero: true,
+                                grid: { drawOnChartArea: false },
+                            }
+                        }
+                    }
+                };
+            };
 
             const renderRangeChart = (pathData) => {
                 const vectorLength = pathData[0].embedding_vector.length;
@@ -349,27 +487,44 @@
                 };
             };
             
-            const renderPathGraph = (view = 'range') => {
-                if (pathChart) {
-                    pathChart.destroy();
-                }
+            const updateChartView = (view = 'progression') => {
+                if (pathChart) pathChart.destroy();
                 if (currentPathData.length === 0) return;
 
-                const chartConfig = view === 'range' 
-                    ? renderRangeChart(currentPathData) 
-                    : renderDifferenceChart(currentPathData);
+                let chartConfig;
+                switch (view) {
+                    case 'difference':
+                        chartConfig = renderDifferenceChart(currentPathData);
+                        break;
+                    case 'range':
+                        chartConfig = renderRangeChart(currentPathData);
+                        break;
+                    case 'progression':
+                    default:
+                        chartConfig = renderProgressionChart(currentPathData);
+                        break;
+                }
                 
-                pathChart = new Chart(pathGraphCanvas.getContext('2d'), chartConfig);
-
-                viewRangeBtn.classList.toggle('active', view === 'range');
-                viewDiffBtn.classList.toggle('active', view === 'difference');
+                if (chartConfig) {
+                    pathChart = new Chart(pathGraphCanvas.getContext('2d'), chartConfig);
+                } else {
+                    console.warn(`Chart view '${view}' could not be rendered.`);
+                }
+                
+                document.querySelectorAll('.graph-view-switcher button').forEach(btn => btn.classList.remove('active'));
+                // FIX: Correctly build the button ID to match the HTML
+                const buttonId = `view-${view === 'difference' ? 'diff' : view}-btn`;
+                document.getElementById(buttonId)?.classList.add('active');
             };
 
-            viewRangeBtn.addEventListener('click', () => renderPathGraph('range'));
-            viewDiffBtn.addEventListener('click', () => renderPathGraph('difference'));
+            viewProgressionBtn.addEventListener('click', () => updateChartView('progression'));
+            viewRangeBtn.addEventListener('click', () => updateChartView('range'));
+            viewDiffBtn.addEventListener('click', () => updateChartView('difference'));
 
             pathForm.addEventListener('submit', async function (event) {
                 event.preventDefault();
+                currentPathData = [];
+                
                 const startSongId = startSongIdInput.value;
                 const endSongId = endSongIdInput.value;
                 const maxSteps = document.getElementById('max_steps').value;
@@ -409,7 +564,7 @@
                     currentTrackIds = currentPathData.map(track => track.item_id);
 
                     if (currentPathData.every(track => track.embedding_vector && track.embedding_vector.length > 0)) {
-                        renderPathGraph('range');
+                        updateChartView('progression');
                         graphContainer.classList.remove('hidden');
                     } else {
                         console.warn("Graph not rendered because songs are missing embedding vectors.");

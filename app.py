@@ -41,7 +41,8 @@ from config import JELLYFIN_URL, JELLYFIN_USER_ID, JELLYFIN_TOKEN, HEADERS, TEMP
     DBSCAN_MIN_SAMPLES_MIN, DBSCAN_MIN_SAMPLES_MAX, GMM_N_COMPONENTS_MIN, GMM_N_COMPONENTS_MAX, \
     SPECTRAL_N_CLUSTERS_MIN, SPECTRAL_N_CLUSTERS_MAX, ENABLE_CLUSTERING_EMBEDDINGS, \
     PCA_COMPONENTS_MIN, PCA_COMPONENTS_MAX, CLUSTERING_RUNS, MOOD_LABELS, TOP_N_MOODS, APP_VERSION, \
-    AI_MODEL_PROVIDER, OLLAMA_SERVER_URL, OLLAMA_MODEL_NAME, GEMINI_API_KEY, GEMINI_MODEL_NAME, TOP_N_PLAYLISTS
+    AI_MODEL_PROVIDER, OLLAMA_SERVER_URL, OLLAMA_MODEL_NAME, GEMINI_API_KEY, GEMINI_MODEL_NAME, TOP_N_PLAYLISTS, \
+    PATH_DISTANCE_METRIC # --- NEW: Import path distance metric ---
 
 # NOTE: Annoy Manager import is moved to be local where used to prevent circular imports.
 
@@ -966,117 +967,6 @@ def get_active_tasks_endpoint():
 def get_config_endpoint():
     """
     Get the current server configuration values.
-    ---
-    tags:
-      - Configuration
-    responses:
-      200:
-        description: A JSON object containing various configuration parameters.
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                jellyfin_url:
-                  type: string
-                jellyfin_user_id:
-                  type: string
-                jellyfin_token:
-                  type: string
-                num_recent_albums:
-                  type: integer
-                max_distance:
-                  type: number
-                max_songs_per_cluster:
-                  type: integer
-                max_songs_per_artist:
-                  type: integer
-                top_n_playlists:
-                  type: integer
-                cluster_algorithm:
-                  type: string
-                num_clusters_min:
-                  type: integer
-                num_clusters_max:
-                  type: integer
-                dbscan_eps_min:
-                  type: number
-                dbscan_eps_max:
-                  type: number
-                dbscan_min_samples_min:
-                  type: integer
-                dbscan_min_samples_max:
-                  type: integer
-                gmm_n_components_min:
-                  type: integer
-                gmm_n_components_max:
-                  type: integer
-                spectral_n_clusters_min:
-                  type: integer
-                spectral_n_clusters_max:
-                  type: integer
-                pca_components_min:
-                  type: integer
-                pca_components_max:
-                  type: integer
-                min_songs_per_genre_for_stratification:
-                  type: integer
-                stratified_sampling_target_percentile:
-                  type: integer
-                top_n_moods:
-                  type: integer
-                mood_labels:
-                  type: array
-                  items:
-                    type: string
-                ai_model_provider:
-                  type: string
-                  description: Configured AI provider for playlist naming (OLLAMA, GEMINI, NONE).
-                ollama_server_url:
-                  type: string
-                  description: URL of the Ollama server for AI naming.
-                  nullable: true
-                ollama_model_name:
-                  type: string
-                  description: Name of the Ollama model to use for AI naming.
-                  nullable: true
-                gemini_api_key:
-                  type: string
-                  description: Configured Gemini API key (may be a default placeholder).
-                  nullable: true
-                gemini_model_name:
-                  type: string
-                  description: Configured Gemini model name.
-                  nullable: true
-                clustering_runs:
-                  type: integer
-                score_weight_diversity:
-                  type: number
-                  format: float
-                score_weight_silhouette:
-                  type: number
-                  format: float
-                score_weight_davies_bouldin:
-                  type: number
-                  format: float
-                score_weight_calinski_harabasz:
-                  type: number
-                  format: float
-                score_weight_purity:
-                  type: number
-                  format: float
-                score_weight_other_feature_diversity:
-                  type: number
-                  format: float
-                score_weight_other_feature_purity:
-                  type: number
-                  format: float
-                gmm_covariance_type:
-                  type: string
-                  description: Default GMM covariance type.
-                enable_clustering_embeddings:
-                  type: boolean
-                  description: Default state for using embeddings in clustering.
     """
     return jsonify({
         "jellyfin_url": JELLYFIN_URL, "jellyfin_user_id": JELLYFIN_USER_ID, "jellyfin_token": JELLYFIN_TOKEN,
@@ -1095,49 +985,21 @@ def get_config_endpoint():
         "gemini_api_key": GEMINI_API_KEY, "gemini_model_name": GEMINI_MODEL_NAME,
         "top_n_moods": TOP_N_MOODS, "mood_labels": MOOD_LABELS, "clustering_runs": CLUSTERING_RUNS,
         "top_n_playlists": TOP_N_PLAYLISTS,
-        "enable_clustering_embeddings": ENABLE_CLUSTERING_EMBEDDINGS, # Expose new flag
+        "enable_clustering_embeddings": ENABLE_CLUSTERING_EMBEDDINGS,
         "score_weight_diversity": SCORE_WEIGHT_DIVERSITY,
         "score_weight_silhouette": SCORE_WEIGHT_SILHOUETTE,
         "score_weight_davies_bouldin": SCORE_WEIGHT_DAVIES_BOULDIN,
         "score_weight_calinski_harabasz": SCORE_WEIGHT_CALINSKI_HARABASZ,
         "score_weight_purity": SCORE_WEIGHT_PURITY,
-        # *** NEW: Add new 'other_feature' weights to config response ***
         "score_weight_other_feature_diversity": SCORE_WEIGHT_OTHER_FEATURE_DIVERSITY,
-        "score_weight_other_feature_purity": SCORE_WEIGHT_OTHER_FEATURE_PURITY
+        "score_weight_other_feature_purity": SCORE_WEIGHT_OTHER_FEATURE_PURITY,
+        "path_distance_metric": PATH_DISTANCE_METRIC # --- NEW: Expose path distance metric ---
     })
 
 @app.route('/api/playlists', methods=['GET'])
 def get_playlists_endpoint():
     """
     Get all generated playlists and their tracks from the database.
-    ---
-    tags:
-      - Playlists
-    responses:
-      200:
-        description: A dictionary of playlists.
-        content:
-          application/json:
-            schema:
-              type: object
-              description: "A dictionary where keys are playlist names and values are arrays of tracks. Playlist names are descriptive, based on dominant moods, tempo, and other features, and may be generated by AI. A suffix like '_automatic' is always added, and a number may be appended for large playlists that are split (e.g., 'Chill Vibes_automatic (2)')."
-              additionalProperties:
-                type: array
-                items:
-                  type: object
-                  properties:
-                    item_id:
-                      type: string
-                      description: The Jellyfin Item ID of the track.
-                    title:
-                      type: string
-                      description: The title of the track.
-                    author:
-                      type: string
-                      description: The artist of the track.
-                example:
-                  "Energetic_Fast_1": [{"item_id": "xyz", "title": "Song A", "author": "Artist X"}]
-
     """
     from collections import defaultdict # Local import if not used elsewhere globally
     conn = get_db()
