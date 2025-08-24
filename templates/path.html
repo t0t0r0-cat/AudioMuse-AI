@@ -234,6 +234,15 @@
                 }
             });
 
+            // --- Normalization Function with Fixed Range ---
+            const normalizeValue = (value, min, max) => {
+                if (max === min) return 0.5; // Avoid division by zero
+                // Clamp the value to the given range before normalizing
+                const clampedValue = Math.max(min, Math.min(value, max));
+                return (clampedValue - min) / (max - min);
+            };
+
+
             // --- Distance Calculation Functions ---
             const getEuclideanDistance = (v1, v2) => {
                 if (!v1 || !v2 || v1.length !== v2.length) return Infinity;
@@ -268,6 +277,10 @@
                 const labels = pathData.map((track, index) => `${index + 1}: ${track.title.substring(0, 20)}...`);
                 const startVector = pathData[0].embedding_vector;
                 const endVector = pathData[pathData.length - 1].embedding_vector;
+                
+                // Define fixed max distance based on metric
+                const maxDistance = pathDistanceMetric === 'angular' ? 3 : 100;
+                const normalize = (val) => normalizeValue(val, 0, maxDistance);
 
                 const distanceFromStart = pathData.map(track => getDistance(startVector, track.embedding_vector));
                 const distanceToEnd = pathData.map(track => getDistance(endVector, track.embedding_vector));
@@ -275,6 +288,11 @@
                     if (i === pathData.length - 1) return 0;
                     return getDistance(track.embedding_vector, pathData[i + 1].embedding_vector);
                 });
+                
+                const normalizedDistanceFromStart = distanceFromStart.map(normalize);
+                const normalizedDistanceToEnd = distanceToEnd.map(normalize);
+                const normalizedStepToStepDistance = stepToStepDistance.map(normalize);
+
                 const metricName = pathDistanceMetric.charAt(0).toUpperCase() + pathDistanceMetric.slice(1);
 
                 return {
@@ -284,7 +302,7 @@
                         datasets: [{
                             type: 'line',
                             label: 'Distance from Start',
-                            data: distanceFromStart,
+                            data: normalizedDistanceFromStart,
                             borderColor: 'rgba(54, 162, 235, 1)',
                             backgroundColor: 'rgba(54, 162, 235, 0.2)',
                             fill: false,
@@ -294,7 +312,7 @@
                         }, {
                             type: 'line',
                             label: 'Distance to End',
-                            data: distanceToEnd,
+                            data: normalizedDistanceToEnd,
                             borderColor: 'rgba(255, 99, 132, 1)',
                             backgroundColor: 'rgba(255, 99, 132, 0.2)',
                             fill: false,
@@ -304,7 +322,7 @@
                         }, {
                             type: 'bar',
                             label: 'Step-to-Step Jump',
-                            data: stepToStepDistance,
+                            data: normalizedStepToStepDistance,
                             backgroundColor: 'rgba(75, 192, 192, 0.5)',
                             borderColor: 'rgba(75, 192, 192, 1)',
                             borderWidth: 1,
@@ -316,7 +334,7 @@
                         maintainAspectRatio: true,
                         plugins: {
                             legend: { position: 'top' },
-                            title: { display: true, text: 'Progression of Sonic Distance Along the Path' },
+                            title: { display: true, text: 'Normalized Progression of Sonic Distance' },
                             tooltip: {
                                 mode: 'index',
                                 intersect: false,
@@ -338,14 +356,16 @@
                             yDistance: {
                                 type: 'linear',
                                 position: 'left',
-                                title: { display: true, text: `${metricName} Distance from Start/End` },
-                                beginAtZero: true,
+                                title: { display: true, text: `Normalized ${metricName} Distance` },
+                                min: 0,
+                                max: 1,
                             },
                             yStep: {
                                 type: 'linear',
                                 position: 'right',
-                                title: { display: true, text: 'Step Jump Distance' },
-                                beginAtZero: true,
+                                title: { display: true, text: 'Normalized Step Jump' },
+                                min: 0,
+                                max: 1,
                                 grid: { drawOnChartArea: false },
                             }
                         }
@@ -354,6 +374,10 @@
             };
 
             const renderRangeChart = (pathData) => {
+                const embeddingMin = -20;
+                const embeddingMax = 11;
+                const normalize = (val) => normalizeValue(val, embeddingMin, embeddingMax);
+
                 const vectorLength = pathData[0].embedding_vector.length;
                 const minValues = new Array(vectorLength).fill(Infinity);
                 const maxValues = new Array(vectorLength).fill(-Infinity);
@@ -366,6 +390,8 @@
                     }
                 }
                 
+                const normalizedMinValues = minValues.map(normalize);
+                const normalizedMaxValues = maxValues.map(normalize);
                 const labels = Array.from({ length: vectorLength }, (_, i) => `${i + 1}`);
 
                 return {
@@ -374,13 +400,13 @@
                         labels: labels,
                         datasets: [{
                             label: 'Max Value',
-                            data: maxValues,
+                            data: normalizedMaxValues,
                             borderColor: 'rgba(255, 99, 132, 0.8)',
                             borderWidth: 1.5,
                             pointRadius: 0,
                         }, {
                             label: 'Min Value',
-                            data: minValues,
+                            data: normalizedMinValues,
                             borderColor: 'rgba(54, 162, 235, 0.8)',
                             backgroundColor: 'rgba(150, 180, 255, 0.3)',
                             borderWidth: 1.5,
@@ -393,27 +419,21 @@
                         maintainAspectRatio: true,
                         plugins: {
                             legend: { position: 'top' },
-                            title: { display: true, text: 'Variance of Sonic Features Across Path' },
+                            title: { display: true, text: 'Normalized Variance of Sonic Features' },
                             tooltip: {
                                 mode: 'index',
                                 intersect: false,
                                 callbacks: {
                                     title: (tooltipItems) => `Feature Dimension: ${tooltipItems[0].label}`,
-                                    label: (context) => {
-                                        const label = context.dataset.label || '';
-                                        const value = context.parsed.y;
-                                        const featureIndex = context.dataIndex;
-                                        const range = maxValues[featureIndex] - minValues[featureIndex];
-                                        if (context.datasetIndex === 1) {
-                                            return `${label}: ${value.toFixed(4)} (Range: ${range.toFixed(4)})`;
-                                        }
-                                        return `${label}: ${value.toFixed(4)}`;
-                                    }
                                 }
                             },
                         },
                         scales: {
-                            y: { title: { display: true, text: 'Feature Intensity' } },
+                            y: { 
+                                title: { display: true, text: 'Normalized Feature Intensity' },
+                                min: 0,
+                                max: 1
+                            },
                             x: {
                                 title: { display: true, text: 'Feature Dimension' },
                                 ticks: { autoSkip: true, maxTicksLimit: 20 }
@@ -424,17 +444,25 @@
             };
 
             const renderDifferenceChart = (pathData) => {
-                const vectorLength = pathData[0].embedding_vector.length;
+                const embeddingMin = -20;
+                const embeddingMax = 11;
+                
+                const normalizedPathData = pathData.map(track => ({
+                    ...track,
+                    embedding_vector: track.embedding_vector.map(val => normalizeValue(val, embeddingMin, embeddingMax))
+                }));
+
+                const vectorLength = normalizedPathData[0].embedding_vector.length;
                 const differences = new Array(vectorLength).fill(0);
 
                 for (let i = 0; i < vectorLength; i++) {
                     let min = Infinity, max = -Infinity;
-                    for (const track of pathData) {
+                    for (const track of normalizedPathData) {
                         const val = track.embedding_vector[i];
                         if (val < min) min = val;
                         if (val > max) max = val;
                     }
-                    differences[i] = max - min;
+                    differences[i] = max - min; // This will be between 0 and 1
                 }
 
                 const averageDifference = differences.reduce((a, b) => a + b, 0) / differences.length;
@@ -467,7 +495,7 @@
                         maintainAspectRatio: true,
                         plugins: {
                             legend: { display: true },
-                            title: { display: true, text: 'Absolute Difference in Features Across Path' },
+                            title: { display: true, text: 'Normalized Absolute Difference in Features' },
                             tooltip: {
                                 mode: 'index',
                                 intersect: false,
@@ -477,7 +505,11 @@
                             },
                         },
                         scales: {
-                            y: { title: { display: true, text: 'Absolute Difference' } },
+                            y: { 
+                                title: { display: true, text: 'Normalized Absolute Difference' },
+                                min: 0,
+                                max: 1
+                            },
                             x: {
                                 title: { display: true, text: 'Feature Dimension' },
                                 ticks: { autoSkip: true, maxTicksLimit: 20 }
@@ -512,7 +544,6 @@
                 }
                 
                 document.querySelectorAll('.graph-view-switcher button').forEach(btn => btn.classList.remove('active'));
-                // FIX: Correctly build the button ID to match the HTML
                 const buttonId = `view-${view === 'difference' ? 'diff' : view}-btn`;
                 document.getElementById(buttonId)?.classList.add('active');
             };
