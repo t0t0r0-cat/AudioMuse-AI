@@ -35,6 +35,12 @@ And now just some **NEWS:**
 > * Version 0.6.4-beta introdcue **Sonic Fingerprint** turn your listening history in a fingerprint to discover similar sonic songs.
 > * Version 0.6.3-beta introduce **Voyager index** for the similarity function. Raising the recall from 70-80% to 99% for 100 similar song. Also using less memory.
 
+## Disclaimer
+
+**Important:** Despite the similar name, this project (**AudioMuse-AI**) is an independent, community-driven effort. It has no official connection to the website audiomuse.ai.
+
+We are **not affiliated with, endorsed by, or sponsored by** the owners of `audiomuse.ai`.
+
 ## **Table of Contents**
 
 - [Quick Start Deployment on K3S WITH HELM](#quick-start-deployment-on-k3s-with-helm)
