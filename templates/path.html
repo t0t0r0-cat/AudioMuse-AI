@@ -601,16 +601,22 @@
                         console.warn("Graph not rendered because songs are missing embedding vectors.");
                     }
                     
-                    const totalVariance = currentPathData[0].embedding_vector.reduce((sum, _, i) => {
+                    const embeddingMin = -20;
+                    const embeddingMax = 11;
+                    const normalizedPathDataForVariance = currentPathData.map(track => 
+                        track.embedding_vector.map(val => normalizeValue(val, embeddingMin, embeddingMax))
+                    );
+
+                    const totalVariance = normalizedPathDataForVariance[0].reduce((sum, _, i) => {
                         let min = Infinity, max = -Infinity;
-                        currentPathData.forEach(track => {
-                            if (track.embedding_vector[i] < min) min = track.embedding_vector[i];
-                            if (track.embedding_vector[i] > max) max = track.embedding_vector[i];
+                        normalizedPathDataForVariance.forEach(normVector => {
+                            if (normVector[i] < min) min = normVector[i];
+                            if (normVector[i] > max) max = normVector[i];
                         });
                         return sum + (max - min);
                     }, 0);
 
-                    const summaryText = `Found a path with ${currentPathData.length} songs. Path Variance Score: ${totalVariance.toFixed(4)}`;
+                    const summaryText = `Found a path with ${currentPathData.length} songs. Normalized Path Variance Score: ${totalVariance.toFixed(4)}`;
                     statusDiv.textContent = summaryText;
 
                     const tableHTML = `
