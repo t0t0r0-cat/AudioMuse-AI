@@ -256,7 +256,9 @@ def _deduplicate_and_filter_neighbors(song_results: list, db_conn, original_song
                 added_detail['title'], added_detail['author']
             ):
                 is_duplicate = True
-                logger.info(f"Found duplicate: '{current_details['title']}' by '{current_details['author']}'.")
+                # --- MODIFIED LINE ---
+                # Now logs the distance of the duplicate track as well.
+                logger.info(f"Found duplicate: '{current_details['title']}' by '{current_details['author']}' (Distance: {song['distance']:.4f}).")
                 break
         
         if not is_duplicate:

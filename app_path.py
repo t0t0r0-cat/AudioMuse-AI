@@ -4,6 +4,7 @@ import logging
 from tasks.path_manager import find_path_between_songs
 from config import PATH_DEFAULT_LENGTH
 import numpy as np
+import math # Import the math module
 
 logger = logging.getLogger(__name__)
 
@@ -53,10 +54,12 @@ def find_path_endpoint():
                 # Ensure the key exists even if there's no vector, for frontend consistency
                 song['embedding_vector'] = []
 
+        # --- FIX: Convert total_distance from numpy.float32 to a standard Python float ---
+        final_distance = float(total_distance) if total_distance is not None and math.isfinite(total_distance) else 0.0
 
         return jsonify({
             "path": path,
-            "total_distance": total_distance
+            "total_distance": final_distance
         })
 
     except Exception as e:
