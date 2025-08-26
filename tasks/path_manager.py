@@ -9,7 +9,8 @@ from .voyager_manager import get_vector_by_id, find_nearest_neighbors_by_vector,
 from app import get_db, get_score_data_by_ids, get_tracks_by_ids
 from config import (
     PATH_AVG_JUMP_SAMPLE_SIZE, PATH_CANDIDATES_PER_STEP, PATH_DEFAULT_LENGTH,
-    PATH_DISTANCE_METRIC, VOYAGER_METRIC, PATH_LCORE_MULTIPLIER
+    PATH_DISTANCE_METRIC, VOYAGER_METRIC, PATH_LCORE_MULTIPLIER,
+    DUPLICATE_DISTANCE_THRESHOLD_COSINE, DUPLICATE_DISTANCE_THRESHOLD_EUCLIDEAN
 )
 
 logger = logging.getLogger(__name__)
@@ -86,7 +87,6 @@ def _create_path_from_ids(path_ids):
     seen = set()
     unique_path_ids = [x for x in path_ids if not (x in seen or seen.add(x))]
 
-    # --- CHANGED: Use get_tracks_by_ids to include embedding vectors ---
     path_details = get_tracks_by_ids(unique_path_ids)
     details_map = {d['item_id']: d for d in path_details}
     
@@ -103,10 +103,8 @@ def _calculate_local_average_jump_distance(start_item_id, end_item_id, sample_si
     
     distances = []
     
-    # Process neighbors for both the start and end points
     for item_id in [start_item_id, end_item_id]:
         try:
-            # Step 1: Use Voyager to get an ordered list of neighbor IDs.
             neighbors = find_nearest_neighbors_by_id(item_id, n=sample_size)
             if not neighbors:
                 continue
@@ -115,13 +113,10 @@ def _calculate_local_average_jump_distance(start_item_id, end_item_id, sample_si
             if source_vector is None:
                 continue
 
-            # Step 2: Create a chain of vectors: [start_song, neighbor_1, neighbor_2, ...]
             neighbor_vectors = [get_vector_by_id(n['item_id']) for n in neighbors]
-            # Filter out any None vectors that may have failed to fetch
             valid_neighbor_vectors = [v for v in neighbor_vectors if v is not None]
             vector_chain = [source_vector] + valid_neighbor_vectors
 
-            # Step 3: Calculate the distance between each consecutive item in the chain.
             for i in range(len(vector_chain) - 1):
                 dist = get_distance(vector_chain[i], vector_chain[i+1])
                 distances.append(dist)
@@ -145,28 +140,25 @@ def _normalize_signature(artist, title):
     return (artist_norm, title_norm)
 
 
-def _find_best_unique_song(centroid_vec, used_song_ids, used_signatures):
+def _find_best_unique_song(centroid_vec, used_song_ids, used_signatures, last_added_song_details=None):
     """
-    Finds the best song for a centroid that is not already used by ID or by artist/title signature.
+    Finds the best song for a centroid that is not already used by ID, signature,
+    or too close in distance to the previously added song.
     """
-    # Fetch a larger pool of candidates to account for filtering
+    threshold = DUPLICATE_DISTANCE_THRESHOLD_COSINE if PATH_DISTANCE_METRIC == 'angular' else DUPLICATE_DISTANCE_THRESHOLD_EUCLIDEAN
+
     try:
         candidates_voyager = find_nearest_neighbors_by_vector(centroid_vec, n=PATH_CANDIDATES_PER_STEP * 3)
     except Exception as e:
-        logger.error(f"Error finding neighbors for a centroid during unique song search: {e}")
+        logger.error(f"Error finding neighbors for a centroid: {e}")
         return None
 
     if not candidates_voyager:
         return None
 
     candidate_ids = [c['item_id'] for c in candidates_voyager]
-    
-    # Fetch details for all candidates at once to minimize DB calls
     candidate_details = get_score_data_by_ids(candidate_ids)
     details_map = {d['item_id']: d for d in candidate_details}
-
-    best_song_info = None
-    min_dist_to_centroid = float('inf')
 
     for candidate in candidates_voyager:
         candidate_id = candidate['item_id']
@@ -177,19 +169,34 @@ def _find_best_unique_song(centroid_vec, used_song_ids, used_signatures):
 
         signature = _normalize_signature(details.get('author'), details.get('title'))
 
-        # Check for duplicates by both ID and artist/title signature
-        if candidate_id not in used_song_ids and signature not in used_signatures:
-            candidate_vector = get_vector_by_id(candidate_id)
-            if candidate_vector is not None:
-                dist = get_distance(candidate_vector, centroid_vec)
-                if dist < min_dist_to_centroid:
-                    min_dist_to_centroid = dist
-                    best_song_info = {
-                        "item_id": candidate_id,
-                        "signature": signature
-                    }
-    
-    return best_song_info
+        if candidate_id in used_song_ids or signature in used_signatures:
+            logger.info(f"Filtering song (NAME/ID FILTER): '{details.get('title')}' by '{details.get('author')}' as it is already in the path.")
+            continue
+
+        candidate_vector = get_vector_by_id(candidate_id)
+        if candidate_vector is None:
+            continue
+            
+        if last_added_song_details and 'vector' in last_added_song_details:
+            distance_from_last = get_distance(candidate_vector, last_added_song_details['vector'])
+            if distance_from_last < threshold:
+                # --- MODIFIED: Made log message consistent ---
+                logger.info(
+                    f"Filtering song (DISTANCE FILTER): '{details.get('title')}' by '{details.get('author')}' "
+                    f"due to direct distance of {distance_from_last:.4f} from "
+                    f"'{last_added_song_details['title']}' by '{last_added_song_details['author']}' (Threshold: {threshold})."
+                )
+                continue
+
+        return {
+            "item_id": candidate_id,
+            "signature": signature,
+            "vector": candidate_vector,
+            "title": details.get('title'),
+            "author": details.get('author')
+        }
+
+    return None
 
 
 def find_path_between_songs(start_item_id, end_item_id, Lreq=PATH_DEFAULT_LENGTH):
@@ -200,17 +207,20 @@ def find_path_between_songs(start_item_id, end_item_id, Lreq=PATH_DEFAULT_LENGTH
 
     start_vector = get_vector_by_id(start_item_id)
     end_vector = get_vector_by_id(end_item_id)
-    start_details = get_score_data_by_ids([start_item_id])
-    end_details = get_score_data_by_ids([end_item_id])
+    start_details_list = get_score_data_by_ids([start_item_id])
+    end_details_list = get_score_data_by_ids([end_item_id])
 
-    if not all([start_vector is not None, end_vector is not None, start_details, end_details]):
+    if not all([start_vector is not None, end_vector is not None, start_details_list, end_details_list]):
         logger.error("Could not retrieve vectors or details for start or end song.")
         return None, 0.0
+        
+    start_details = start_details_list[0]
+    end_details = end_details_list[0]
 
     used_song_ids = {start_item_id, end_item_id}
     used_signatures = {
-        _normalize_signature(start_details[0].get('author'), start_details[0].get('title')),
-        _normalize_signature(end_details[0].get('author'), end_details[0].get('title'))
+        _normalize_signature(start_details.get('author'), start_details.get('title')),
+        _normalize_signature(end_details.get('author'), end_details.get('title'))
     }
 
     delta_avg = _calculate_local_average_jump_distance(start_item_id, end_item_id)
@@ -222,10 +232,7 @@ def find_path_between_songs(start_item_id, end_item_id, Lreq=PATH_DEFAULT_LENGTH
     Lmax = int(np.floor(D / delta_avg)) + 1 if delta_avg > 0 else Lreq
     Lcore = min(Lreq, Lmax)
     Lcore = max(2, Lcore)
-
-    # Multiply Lcore by the configurable factor to increase centroid density
     Lcore *= PATH_LCORE_MULTIPLIER
-
 
     logger.info(f"Direct distance (D): {D:.4f}, Local avg jump (δ_avg): {delta_avg:.4f}")
     logger.info(f"Requested steps (L_req): {Lreq}, Max realistic (L_max): {Lmax}, Using core steps (L_core): {Lcore}")
@@ -233,19 +240,20 @@ def find_path_between_songs(start_item_id, end_item_id, Lreq=PATH_DEFAULT_LENGTH
     if Lcore < 2:
         return _create_path_from_ids([start_item_id, end_item_id]), D
 
-    backbone_centroids = interpolate_centroids(
-        start_vector, end_vector, num=Lcore, metric=PATH_DISTANCE_METRIC
-    )
+    backbone_centroids = interpolate_centroids(start_vector, end_vector, num=Lcore, metric=PATH_DISTANCE_METRIC)
     path_ids = [start_item_id]
+    
+    last_song_details = {**start_details, 'vector': start_vector}
 
     for i in range(1, Lcore - 1):
         centroid_vec = backbone_centroids[i]
-        best_song = _find_best_unique_song(centroid_vec, used_song_ids, used_signatures)
+        best_song = _find_best_unique_song(centroid_vec, used_song_ids, used_signatures, last_added_song_details=last_song_details)
         
         if best_song:
             path_ids.append(best_song['item_id'])
             used_song_ids.add(best_song['item_id'])
             used_signatures.add(best_song['signature'])
+            last_song_details = best_song
         else:
             logger.warning(f"Could not find a unique song for backbone step {i+1}.")
 
@@ -265,6 +273,11 @@ def find_path_between_songs(start_item_id, end_item_id, Lreq=PATH_DEFAULT_LENGTH
             start_segment_id = path_ids[i]
             end_segment_id = path_ids[i+1]
             final_path_ids.append(start_segment_id)
+            
+            start_segment_details_list = get_score_data_by_ids([start_segment_id])
+            if not start_segment_details_list: continue
+            last_song_details = {**start_segment_details_list[0], 'vector': get_vector_by_id(start_segment_id)}
+
 
             num_to_insert = base_songs_per_segment + (1 if i < remainder else 0)
             if num_to_insert > 0:
@@ -277,11 +290,12 @@ def find_path_between_songs(start_item_id, end_item_id, Lreq=PATH_DEFAULT_LENGTH
                     )[1:-1]
                     
                     for centroid_vec in intermediate_centroids:
-                        best_song = _find_best_unique_song(centroid_vec, used_song_ids, used_signatures)
+                        best_song = _find_best_unique_song(centroid_vec, used_song_ids, used_signatures, last_added_song_details=last_song_details)
                         if best_song:
                             final_path_ids.append(best_song['item_id'])
                             used_song_ids.add(best_song['item_id'])
                             used_signatures.add(best_song['signature'])
+                            last_song_details = best_song
                         else:
                             logger.warning(f"Could not find a unique filler song for segment {i}.")
         

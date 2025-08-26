@@ -252,3 +252,10 @@ STRATIFIED_SAMPLING_TARGET_PERCENTILE = int(os.getenv("STRATIFIED_SAMPLING_TARGE
 
 # Percentage of songs to change in the stratified sample between clustering runs (0.0 to 1.0)
 SAMPLING_PERCENTAGE_CHANGE_PER_RUN = float(os.getenv("SAMPLING_PERCENTAGE_CHANGE_PER_RUN", "0.2"))
+
+
+# --- NEW: Duplicate Detection by Distance ---
+# Threshold for considering songs as duplicates based on their distance in the vector space.
+# This helps catch identical songs with slightly different metadata (e.g., from different albums).
+DUPLICATE_DISTANCE_THRESHOLD_COSINE = float(os.getenv("DUPLICATE_DISTANCE_THRESHOLD_COSINE", "0.01"))
+DUPLICATE_DISTANCE_THRESHOLD_EUCLIDEAN = float(os.getenv("DUPLICATE_DISTANCE_THRESHOLD_EUCLIDEAN", "0.15"))
