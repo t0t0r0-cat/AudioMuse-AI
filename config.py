@@ -200,7 +200,7 @@ VOYAGER_QUERY_EF = int(os.environ.get("VOYAGER_QUERY_EF", "1024"))
 
 # --- Pathfinding Constants ---
 # The distance metric to use for pathfinding. Options: 'angular', 'euclidean'.
-PATH_DISTANCE_METRIC = os.environ.get("PATH_DISTANCE_METRIC", "euclidean").lower()
+PATH_DISTANCE_METRIC = os.environ.get("PATH_DISTANCE_METRIC", "angular").lower()
 # Default number of songs in the path if not specified in the API request.
 PATH_DEFAULT_LENGTH = int(os.environ.get("PATH_DEFAULT_LENGTH", "25"))
 # Number of random songs to sample for calculating the average jump distance.
