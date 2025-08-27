@@ -459,8 +459,12 @@ This are the default parameters on wich the analysis or clustering task will be 
 | `VOYAGER_QUERY_EF`                       | Number neighbor analyzed during the query.                                 | `1024`                                 |
 | `VOYAGER_METRIC`                           | Different tipe of distance metrics: `angular`, `euclidean`,`dot`         | `angular`              |
 | `SIMILARITY_ELIMINATE_DUPLICATES_DEFAULT` | It enable the possibility of use the `MAX_SONGS_PER_ARTIST` also in similar song  | `true`              |
-| **Sonic Fingerprint General**    |                                                                              |                                      |
-| `SONIC_FINGERPRINT_NEIGHBORS`             | Default number of track for the sonic fingerprint                            | `100`                      |
+| **Sonic Fingerprint General**    |                                                                                    |                                      |
+| `SONIC_FINGERPRINT_NEIGHBORS`             | Default number of track for the sonic fingerprint                         | `100`                      |
+| **Similar Song and Song Path Duplicate filtering General** |                                                          |                                      |
+| `DUPLICATE_DISTANCE_THRESHOLD_COSINE`     | Less than this cosine distance the track is a duplicate.                  | `0.01`                      |
+| `DUPLICATE_DISTANCE_THRESHOLD_EUCLIDEAN`  | Less than this euclidean distance the track is a duplicate.               | `0.15`                      |
+| `DUPLICATE_DISTANCE_CHECK_LOOKBACK`       | How many previous song need to be checked for duplicate.                  | `1`                      |
 | **Song Path General**    |                                                                              |                                      |
 | `PATH_DISTANCE_METRIC`                 | The distance metric to use for pathfinding. Options: 'angular', 'euclidean'| `euclidean`   |
 | `PATH_DEFAULT_LENGTH`                  | Default number of songs in the path if not specified in the API request     | `25`          |

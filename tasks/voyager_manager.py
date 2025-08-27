@@ -12,7 +12,8 @@ import re
 from config import (
     EMBEDDING_DIMENSION, INDEX_NAME, VOYAGER_METRIC, VOYAGER_EF_CONSTRUCTION,
     VOYAGER_M, VOYAGER_QUERY_EF, MAX_SONGS_PER_ARTIST,
-    DUPLICATE_DISTANCE_THRESHOLD_COSINE, DUPLICATE_DISTANCE_THRESHOLD_EUCLIDEAN
+    DUPLICATE_DISTANCE_THRESHOLD_COSINE, DUPLICATE_DISTANCE_THRESHOLD_EUCLIDEAN,
+    DUPLICATE_DISTANCE_CHECK_LOOKBACK
 )
 
 # Import from other project modules
@@ -248,10 +249,13 @@ def _is_same_song(title1, artist1, title2, artist2):
 
 def _filter_by_distance(song_results: list, db_conn):
     """
-    --- FIXED ---
-    Filters a list of songs to remove items that are too close in direct vector distance.
-    Assumes the input list is sorted by distance from the original query song.
+    Filters a list of songs to remove items that are too close in direct vector distance
+    to a lookback window of previously kept songs.
     """
+    # *** FIX: Check if the feature is disabled. If so, return the original list immediately. ***
+    if DUPLICATE_DISTANCE_CHECK_LOOKBACK <= 0:
+        return song_results
+
     if not song_results:
         return []
 
@@ -266,33 +270,34 @@ def _filter_by_distance(song_results: list, db_conn):
     threshold = DUPLICATE_DISTANCE_THRESHOLD_COSINE if VOYAGER_METRIC == 'angular' else DUPLICATE_DISTANCE_THRESHOLD_EUCLIDEAN
     
     filtered_songs = []
-    if song_results:
-        filtered_songs.append(song_results[0])
-        
-        for i in range(1, len(song_results)):
-            current_song = song_results[i]
-            last_kept_song = filtered_songs[-1]
+    for current_song in song_results:
+        is_too_close = False
+        current_vector = get_vector_by_id(current_song['item_id'])
+        if current_vector is None:
+            continue # Skip if we can't get a vector
 
-            current_vector = get_vector_by_id(current_song['item_id'])
-            last_kept_vector = get_vector_by_id(last_kept_song['item_id'])
-            
-            if current_vector is None or last_kept_vector is None:
-                filtered_songs.append(current_song)
+        # Check against the last N songs in the filtered list
+        lookback_window = filtered_songs[-DUPLICATE_DISTANCE_CHECK_LOOKBACK:]
+        for recent_song in lookback_window:
+            recent_vector = get_vector_by_id(recent_song['item_id'])
+            if recent_vector is None:
                 continue
 
-            direct_dist = get_direct_distance(current_vector, last_kept_vector)
+            direct_dist = get_direct_distance(current_vector, recent_vector)
             
-            if direct_dist > threshold:
-                filtered_songs.append(current_song)
-            else:
+            if direct_dist < threshold:
                 current_details = details_map.get(current_song['item_id'], {'title': 'N/A', 'author': 'N/A'})
-                last_kept_details = details_map.get(last_kept_song['item_id'], {'title': 'N/A', 'author': 'N/A'})
-                # --- MODIFIED: Improved log message for distance filter ---
+                recent_details = details_map.get(recent_song['item_id'], {'title': 'N/A', 'author': 'N/A'})
                 logger.info(
                     f"Filtering song (DISTANCE FILTER): '{current_details['title']}' by '{current_details['author']}' "
                     f"due to direct distance of {direct_dist:.4f} from "
-                    f"'{last_kept_details['title']}' by '{last_kept_details['author']}' (Threshold: {threshold})."
+                    f"'{recent_details['title']}' by '{recent_details['author']}' (Threshold: {threshold})."
                 )
+                is_too_close = True
+                break
+        
+        if not is_too_close:
+            filtered_songs.append(current_song)
 
     return filtered_songs
 
@@ -328,7 +333,6 @@ def _deduplicate_and_filter_neighbors(song_results: list, db_conn, original_song
                 added_detail['title'], added_detail['author']
             ):
                 is_duplicate = True
-                # --- MODIFIED: Improved log message for name filter ---
                 logger.info(f"Found duplicate (NAME FILTER): '{current_details['title']}' by '{current_details['author']}' (Distance from source: {song['distance']:.4f}).")
                 break
         
@@ -402,7 +406,20 @@ def find_nearest_neighbors_by_id(target_item_id: str, n: int = 10, eliminate_dup
         if item_id and item_id != target_item_id:
             initial_results.append({"item_id": item_id, "distance": float(dist)})
 
-    distance_filtered_results = _filter_by_distance(initial_results, db_conn)
+    # --- IMPLEMENTATION OF USER PROPOSAL ---
+    # 1. Create a representation of the original song to prepend to the list.
+    original_song_for_filtering = {"item_id": target_item_id, "distance": 0.0}
+    
+    # 2. Prepend the original song to the neighbor results.
+    results_with_original = [original_song_for_filtering] + initial_results
+    
+    # 3. Pass the combined list to the distance filter.
+    # The first song in the lookback window will now be the original song.
+    temp_filtered_results = _filter_by_distance(results_with_original, db_conn)
+    
+    # 4. Remove the original song from the filtered list before proceeding.
+    distance_filtered_results = [song for song in temp_filtered_results if song['item_id'] != target_item_id]
+    # --- END OF IMPLEMENTATION ---
 
     unique_results_by_song = _deduplicate_and_filter_neighbors(distance_filtered_results, db_conn, target_song_details)
     
