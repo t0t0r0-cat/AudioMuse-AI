@@ -252,7 +252,6 @@ def _filter_by_distance(song_results: list, db_conn):
     Filters a list of songs to remove items that are too close in direct vector distance
     to a lookback window of previously kept songs.
     """
-    # *** FIX: Check if the feature is disabled. If so, return the original list immediately. ***
     if DUPLICATE_DISTANCE_CHECK_LOOKBACK <= 0:
         return song_results
 
@@ -268,6 +267,7 @@ def _filter_by_distance(song_results: list, db_conn):
             details_map[row['item_id']] = {'title': row['title'], 'author': row['author']}
 
     threshold = DUPLICATE_DISTANCE_THRESHOLD_COSINE if VOYAGER_METRIC == 'angular' else DUPLICATE_DISTANCE_THRESHOLD_EUCLIDEAN
+    metric_name = 'Angular' if VOYAGER_METRIC == 'angular' else 'Euclidean'
     
     filtered_songs = []
     for current_song in song_results:
@@ -289,7 +289,7 @@ def _filter_by_distance(song_results: list, db_conn):
                 current_details = details_map.get(current_song['item_id'], {'title': 'N/A', 'author': 'N/A'})
                 recent_details = details_map.get(recent_song['item_id'], {'title': 'N/A', 'author': 'N/A'})
                 logger.info(
-                    f"Filtering song (DISTANCE FILTER): '{current_details['title']}' by '{current_details['author']}' "
+                    f"Filtering song (DISTANCE FILTER) with {metric_name} distance: '{current_details['title']}' by '{current_details['author']}' "
                     f"due to direct distance of {direct_dist:.4f} from "
                     f"'{recent_details['title']}' by '{recent_details['author']}' (Threshold: {threshold})."
                 )

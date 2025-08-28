@@ -149,6 +149,7 @@ def _find_best_unique_song(centroid_vec, used_song_ids, used_signatures, path_so
     The lookback window is configurable via DUPLICATE_DISTANCE_CHECK_LOOKBACK.
     """
     threshold = DUPLICATE_DISTANCE_THRESHOLD_COSINE if PATH_DISTANCE_METRIC == 'angular' else DUPLICATE_DISTANCE_THRESHOLD_EUCLIDEAN
+    metric_name = 'Angular' if PATH_DISTANCE_METRIC == 'angular' else 'Euclidean'
 
     try:
         candidates_voyager = find_nearest_neighbors_by_vector(centroid_vec, n=PATH_CANDIDATES_PER_STEP * 3)
@@ -189,7 +190,7 @@ def _find_best_unique_song(centroid_vec, used_song_ids, used_signatures, path_so
                     distance_from_prev = get_distance(candidate_vector, prev_song_details['vector'])
                     if distance_from_prev < threshold:
                         logger.info(
-                            f"Filtering song (DISTANCE FILTER): '{details.get('title')}' by '{details.get('author')}' "
+                            f"Filtering song (DISTANCE FILTER) with {metric_name} distance: '{details.get('title')}' by '{details.get('author')}' "
                             f"due to direct distance of {distance_from_prev:.4f} from "
                             f"'{prev_song_details['title']}' by '{prev_song_details['author']}' (Threshold: {threshold})."
                         )
