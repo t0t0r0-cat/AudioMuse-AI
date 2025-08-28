@@ -60,19 +60,13 @@
                                 <label for="jellyfin_user_identifier">Jellyfin Username or User ID:</label>
                                 <input type="text" id="jellyfin_user_identifier" name="jellyfin_user_identifier" required placeholder="Enter Jellyfin Username or User ID">
                             </div>
-                            <div>
-                                <label for="jellyfin_token">Jellyfin API Token:</label>
-                                <input type="password" id="jellyfin_token" name="jellyfin_token" required placeholder="Create in Jellyfin Dashboard > API Keys">
-                            </div>
+                            <!-- REMOVED: The Jellyfin API Token field is removed for security -->
                             {% elif mediaserver_type == 'navidrome' %}
                             <div>
                                 <label for="navidrome_user">Navidrome Username:</label>
                                 <input type="text" id="navidrome_user" name="navidrome_user" required>
                             </div>
-                            <div>
-                                <label for="navidrome_password">Navidrome Password:</label>
-                                <input type="password" id="navidrome_password" name="navidrome_password" required>
-                            </div>
+                            <!-- REMOVED: The Navidrome Password field is removed for security -->
                             {% endif %}
                         </div>
                     </fieldset>
@@ -144,15 +138,9 @@
                         if (data.default_user_id) {
                             document.getElementById('jellyfin_user_identifier').value = data.default_user_id;
                         }
-                        if (data.default_token) {
-                            document.getElementById('jellyfin_token').value = data.default_token;
-                        }
                     } else if (mediaserverType === 'navidrome') {
                         if (data.default_user) {
                             document.getElementById('navidrome_user').value = data.default_user;
-                        }
-                        if (data.default_password) {
-                            document.getElementById('navidrome_password').value = data.default_password;
                         }
                     }
                 } catch (error) {
@@ -165,30 +153,15 @@
 
                 const n = parseInt(document.getElementById('n').value, 10);
                 const params = new URLSearchParams({ n: n });
-
-                if (mediaserverType === 'jellyfin') {
-                    const identifier = document.getElementById('jellyfin_user_identifier').value;
-                    const token = document.getElementById('jellyfin_token').value;
-                    if (!identifier || !token) {
-                        statusDiv.textContent = 'Jellyfin User Identifier and Token are required.';
-                        statusDiv.className = 'status-error';
-                        resultsContainer.classList.remove('hidden');
-                        return;
-                    }
-                    params.append('jellyfin_user_identifier', identifier);
-                    params.append('jellyfin_token', token);
-                } else if (mediaserverType === 'navidrome') {
-                    const user = document.getElementById('navidrome_user').value;
-                    const password = document.getElementById('navidrome_password').value;
-                     if (!user || !password) {
-                        statusDiv.textContent = 'Navidrome Username and Password are required.';
-                        statusDiv.className = 'status-error';
-                        resultsContainer.classList.remove('hidden');
-                        return;
-                    }
-                    params.append('navidrome_user', user);
-                    params.append('navidrome_password', password);
+                const user_identifier = document.getElementById('jellyfin_user_identifier').value;
+                if (!user_identifier) {
+                    statusDiv.textContent = 'Jellyfin User Identifier is required.';
+                    statusDiv.className = 'status-error';
+                    resultsContainer.classList.remove('hidden');
+                    return;
                 }
+                params.append('jellyfin_user_identifier', user_identifier);
+                // REMOVED: The token is no longer appended to the request
 
                 resultsContainer.classList.remove('hidden');
                 playlistCreator.classList.add('hidden');
@@ -254,10 +227,10 @@
 
                 if (mediaserverType === 'jellyfin') {
                     payload.user_creds.user_identifier = document.getElementById('jellyfin_user_identifier').value;
-                    payload.user_creds.token = document.getElementById('jellyfin_token').value;
+                    // REMOVED: The token is no longer included in the payload
                 } else if (mediaserverType === 'navidrome') {
                     payload.user_creds.user = document.getElementById('navidrome_user').value;
-                    payload.user_creds.password = document.getElementById('navidrome_password').value;
+                    // REMOVED: The password is no longer included in the payload
                 }
 
                 playlistStatusDiv.textContent = 'Creating playlist...';

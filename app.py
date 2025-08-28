@@ -969,7 +969,6 @@ def get_config_endpoint():
     Get the current server configuration values.
     """
     return jsonify({
-        "jellyfin_url": JELLYFIN_URL, "jellyfin_user_id": JELLYFIN_USER_ID, "jellyfin_token": JELLYFIN_TOKEN,
         "num_recent_albums": NUM_RECENT_ALBUMS, "max_distance": MAX_DISTANCE,
         "max_songs_per_cluster": MAX_SONGS_PER_CLUSTER, "max_songs_per_artist": MAX_SONGS_PER_ARTIST,
         "cluster_algorithm": CLUSTER_ALGORITHM, "num_clusters_min": NUM_CLUSTERS_MIN, "num_clusters_max": NUM_CLUSTERS_MAX,
@@ -982,7 +981,7 @@ def get_config_endpoint():
         "stratified_sampling_target_percentile": STRATIFIED_SAMPLING_TARGET_PERCENTILE,
         "ai_model_provider": AI_MODEL_PROVIDER,
         "ollama_server_url": OLLAMA_SERVER_URL, "ollama_model_name": OLLAMA_MODEL_NAME,
-        "gemini_api_key": GEMINI_API_KEY, "gemini_model_name": GEMINI_MODEL_NAME,
+        "gemini_model_name": GEMINI_MODEL_NAME,
         "top_n_moods": TOP_N_MOODS, "mood_labels": MOOD_LABELS, "clustering_runs": CLUSTERING_RUNS,
         "top_n_playlists": TOP_N_PLAYLISTS,
         "enable_clustering_embeddings": ENABLE_CLUSTERING_EMBEDDINGS,
@@ -993,7 +992,7 @@ def get_config_endpoint():
         "score_weight_purity": SCORE_WEIGHT_PURITY,
         "score_weight_other_feature_diversity": SCORE_WEIGHT_OTHER_FEATURE_DIVERSITY,
         "score_weight_other_feature_purity": SCORE_WEIGHT_OTHER_FEATURE_PURITY,
-        "path_distance_metric": PATH_DISTANCE_METRIC # --- NEW: Expose path distance metric ---
+        "path_distance_metric": PATH_DISTANCE_METRIC
     })
 
 @app.route('/api/playlists', methods=['GET'])

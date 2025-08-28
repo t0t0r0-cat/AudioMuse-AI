@@ -187,9 +187,6 @@ def chat_home():
                             'default_gemini_model_name': {
                                 'type': 'string', 'example': 'gemini-2.5-pro'
                             },
-                            'default_gemini_api_key': {
-                                'type': 'string', 'description': 'The configured Gemini API key (empty if placeholder).'
-                            }
                         }
                     }
                 }
@@ -201,19 +198,12 @@ def chat_config_defaults_api():
     """
     API endpoint to provide default configuration values for the chat interface.
     """
-    # Ensure that the GEMINI_API_KEY from config is only sent if it's not the placeholder.
-    # For security, it's often better not to send API keys to the client at all,
-    # but per your setup, we'll make it available as a default suggestion.
-    config_gemini_api_key = GEMINI_API_KEY
-    if GEMINI_API_KEY == "YOUR-GEMINI-API-KEY-HERE": # Check against the placeholder
-        config_gemini_api_key = "" # Send empty if it's the placeholder
-
+    # The default_gemini_api_key is no longer sent to the front end for security.
     return jsonify({
         "default_ai_provider": AI_MODEL_PROVIDER,
         "default_ollama_model_name": OLLAMA_MODEL_NAME,
         "ollama_server_url": OLLAMA_SERVER_URL, # Ollama server URL might be useful for display/info
         "default_gemini_model_name": GEMINI_MODEL_NAME,
-        "default_gemini_api_key": config_gemini_api_key # API key from config.py
     }), 200
 
 @chat_bp.route('/api/chatPlaylist', methods=['POST'])
@@ -252,7 +242,7 @@ def chat_config_defaults_api():
                         },
                         'gemini_api_key': {
                             'type': 'string',
-                            'description': 'Custom Gemini API key (if ai_provider is GEMINI).'
+                            'description': 'Custom Gemini API key (optional, defaults to server configuration).',
                         }
                     }
                 }
@@ -360,35 +350,6 @@ def chat_playlist_api():
 
     # Define the prompt structure once, to be used by any provider that needs it.
     # The [USER INPUT] placeholder will be replaced dynamically.
-    data = request.get_json()
-    # Mask API key if present in the debug log (repeated due to duplicated block in original file)
-    data_for_log_dup = dict(data) if data else {}
-    if 'gemini_api_key' in data_for_log_dup and data_for_log_dup['gemini_api_key']:
-        data_for_log_dup['gemini_api_key'] = 'API-KEY' # Masked
-    logger.debug("chat_playlist_api called. Raw request data (dup block): %s", data_for_log_dup)
-
-    from app import get_db # Import get_db here, inside the function
-    if not data or 'userInput' not in data:
-        return jsonify({"error": "Missing userInput in request"}), 400
-
-    original_user_input = data.get('userInput')
-    # Use AI provider from request, or fallback to global config, then to "NONE"
-    ai_provider = data.get('ai_provider', AI_MODEL_PROVIDER).upper() # Use the imported constant
-    ai_model_from_request = data.get('ai_model') # Model selected by user on chat page
-
-    ai_response_message = f"Received your request: '{original_user_input}'.\n"
-    actual_model_used = None
-
-    # Variables to hold the final state after potential retries
-    final_query_results_list = None
-    final_executed_query_str = None # The SQL string that was last attempted or successfully executed
-    
-    # Variables for retry logic
-    last_raw_sql_from_ai = None
-    last_error_for_retry = None
-
-    # Define the prompt structure once, to be used by any provider that needs it.
-    # The [USER INPUT] placeholder will be replaced dynamically.
     base_expert_playlist_creator_prompt = """
     You are a specialized AI with expert-level knowledge of music trends (Spotify charts, YouTube trending songs, MTV hits, radio top charts, film soundtracks, etc.) and proficiency in PostgreSQL.
 
@@ -468,7 +429,7 @@ def chat_playlist_api():
     * **MOOD\_LABELS:**
 
         ```
-        rock, pop, alternative, indie, electronic, female vocalists, dance, 00s, alternative rock, jazz, beautiful, metal, chillout, male vocalists, classic rock, soul, indie rock, electronica, 80s, folk, 90s, chill, instrumental, punk, oldies, blues, hard rock, ambient, acoustic, experimental, female vocalist, guitar, Hip-Hop, 70s, party, country, funk, electro, heavy metal, 60s, rnb, indie pop, House
+        rock, pop, alternative, indie, electronic, female vocalists, dance, 00s, alternative rock, jazz, beautiful, metal, chillout, male vocalists, classic rock, soul, indie rock, electronica, 80s, folk, 90s, chill, instrumental, punk, oldies, blues, hard rock, ambient, acoustic, experimental, female vocalist, guitar, Hip-Hop, 70s, party, country, funk, electro, heavy metal, Progressive rock, 60s, rnb, indie pop, sad, House, happy
         ```
     * **OTHER\_FEATURE\_LABELS:**
 
@@ -554,15 +515,16 @@ Original full prompt context (for reference):
 
         elif ai_provider == "GEMINI":
             actual_model_used = ai_model_from_request or GEMINI_MODEL_NAME
-            gemini_api_key_from_request = data.get('gemini_api_key')
-            if not gemini_api_key_from_request:
-                error_msg = "Error: Gemini API key was not provided in the request."
+            # MODIFIED: Get API key from request, but fall back to server config if not provided.
+            gemini_api_key_from_request = data.get('gemini_api_key') or GEMINI_API_KEY
+            if not gemini_api_key_from_request or gemini_api_key_from_request == "YOUR-GEMINI-API-KEY-HERE":
+                error_msg = "Error: Gemini API key is missing. Please provide a valid API key or set it in the server configuration."
                 ai_response_message += error_msg + "\n"
-                if attempt_num == 0: # Fatal for first attempt
+                if attempt_num == 0:
                     return jsonify({"response": {"message": ai_response_message, "original_request": original_user_input, "ai_provider_used": ai_provider, "ai_model_selected": actual_model_used, "executed_query": None, "query_results": None}}), 400
                 last_error_for_retry = error_msg
-                break # Break retry loop, API key issue is not solvable by retrying AI
-            ai_response_message += f"Processing with GEMINI model: {actual_model_used} (using API key from request).\n"
+                break
+            ai_response_message += f"Processing with GEMINI model: {actual_model_used}.\n"
             raw_sql_from_ai_this_attempt = get_gemini_playlist_name(gemini_api_key_from_request, actual_model_used, current_prompt_for_ai)
             if raw_sql_from_ai_this_attempt.startswith("Error:"):
                 ai_response_message += f"Gemini API Error: {raw_sql_from_ai_this_attempt}\n"

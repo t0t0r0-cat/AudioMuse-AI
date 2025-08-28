@@ -181,9 +181,8 @@ def start_clustering_endpoint():
                 default: "Defaults to server-configured OLLAMA_MODEL_NAME"
               gemini_api_key:
                 type: string
-                description: Override for the Gemini API key for this run.
+                description: Override for the Gemini API key for this run (optional, defaults to server configuration).
                 nullable: true
-                default: "Defaults to server-configured GEMINI_API_KEY"
               gemini_model_name:
                 type: string
                 description: Override for the Gemini model name for this run.
@@ -282,6 +281,7 @@ def start_clustering_endpoint():
             "ai_model_provider_param": data.get('ai_model_provider', AI_MODEL_PROVIDER).upper(),
             "ollama_server_url_param": data.get('ollama_server_url', OLLAMA_SERVER_URL),
             "ollama_model_name_param": data.get('ollama_model_name', OLLAMA_MODEL_NAME),
+            # This line already falls back to the config value if the request doesn't contain it.
             "gemini_api_key_param": data.get('gemini_api_key', GEMINI_API_KEY),
             "gemini_model_name_param": data.get('gemini_model_name', GEMINI_MODEL_NAME),
             "top_n_moods_for_clustering_param": int(data.get('top_n_moods', TOP_N_MOODS)),
