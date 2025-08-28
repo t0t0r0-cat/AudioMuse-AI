@@ -380,7 +380,6 @@ async function startTask(taskType) {
             ai_model_provider: aiModelProviderSelect.value,
             ollama_server_url: document.getElementById('config-ollama_server_url').value,
             ollama_model_name: document.getElementById('config-ollama_model_name').value,
-            gemini_api_key: document.getElementById('config-gemini_api_key').value,
             gemini_model_name: document.getElementById('config-gemini_model_name').value,
             enable_clustering_embeddings: document.getElementById('config-enable_clustering_embeddings').checked
         });
