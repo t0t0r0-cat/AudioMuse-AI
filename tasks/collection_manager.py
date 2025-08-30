@@ -15,6 +15,16 @@ from .mediaserver import get_recent_albums, get_tracks_from_album
 
 logger = logging.getLogger(__name__)
 
+# Lua script for an atomic check-and-delete. This is the safest way to release a lock.
+# It ensures that we only delete the lock if we are still the owner (the value matches our task_id).
+LUA_SAFE_RELEASE_LOCK_SCRIPT = """
+if redis.call("get", KEYS[1]) == ARGV[1] then
+    return redis.call("del", KEYS[1])
+else
+    return 0
+end
+"""
+
 def sync_album_batch_task(parent_task_id, album_batch, pocketbase_url, pocketbase_token, main_task_log_prefix="[MainTask-Unknown]"):
     """
     RQ subtask to synchronize a BATCH of albums with Pocketbase.
@@ -164,11 +174,27 @@ def sync_album_batch_task(parent_task_id, album_batch, pocketbase_url, pocketbas
             raise
         finally:
             if song_locks_acquired:
-                logger.info(f"{log_prefix} Releasing {len(song_locks_acquired)} song locks.")
-                redis_conn.delete(*song_locks_acquired)
+                released_count = 0
+                for lock_key in song_locks_acquired:
+                    try:
+                        # Atomically check and release each song lock
+                        released = redis_conn.eval(LUA_SAFE_RELEASE_LOCK_SCRIPT, 1, lock_key, task_id)
+                        if released:
+                            released_count += 1
+                    except Exception as e:
+                        logger.error(f"{log_prefix} Failed to execute Lua script to release song lock {lock_key}: {e}")
+                logger.info(f"{log_prefix} Safely released {released_count}/{len(song_locks_acquired)} song locks.")
+
             if is_batch_lock_acquired:
-                logger.info(f"{log_prefix} Releasing batch lock: {batch_lock_key}")
-                redis_conn.delete(batch_lock_key)
+                try:
+                    # Atomically check and release the main batch lock
+                    released = redis_conn.eval(LUA_SAFE_RELEASE_LOCK_SCRIPT, 1, batch_lock_key, task_id)
+                    if released:
+                        logger.info(f"{log_prefix} Safely released batch lock: {batch_lock_key}")
+                    else:
+                        logger.warning(f"{log_prefix} Did not release batch lock {batch_lock_key} as I am no longer the owner (it may have expired).")
+                except Exception as e:
+                    logger.error(f"{log_prefix} Failed to execute Lua script to release batch lock {batch_lock_key}: {e}")
 
 # --- Main task ---
 def sync_collections_task(url, email, password, num_albums):
@@ -281,17 +307,39 @@ def sync_collections_task(url, email, password, num_albums):
                 
                 time.sleep(10)
 
-            # Final check for failed jobs based on final DB state of sub-tasks
-            failed_sub_tasks = [
-                task for task in get_child_tasks_from_db(current_task_id) 
-                if task.get('status') == TASK_STATUS_FAILURE
-            ]
-            if failed_sub_tasks:
-                raise Exception(f"{len(failed_sub_tasks)}/{total_launched} batch sync tasks failed.")
+            # Final, more robust check of sub-task outcomes.
+            # A simple check for FAILURE is not enough, as skipped jobs are marked SUCCESS.
+            all_child_tasks = get_child_tasks_from_db(current_task_id)
+            
+            # Group tasks by their batch identifier (lock_id, which is sub_type_identifier)
+            tasks_by_batch = {}
+            for task in all_child_tasks:
+                batch_id = task.get('sub_type_identifier')
+                if batch_id:
+                    tasks_by_batch.setdefault(batch_id, []).append(task)
+
+            unprocessed_batches = []
+            for batch_id, tasks in tasks_by_batch.items():
+                # A batch is considered successfully processed if at least one task for it
+                # completed with SUCCESS status AND was not skipped.
+                is_processed = any(
+                    t.get('status') == TASK_STATUS_SUCCESS and "Skipped" not in t.get('details', {}).get('message', '')
+                    for t in tasks
+                )
+                if not is_processed:
+                    unprocessed_batches.append(batch_id)
+
+            if unprocessed_batches:
+                error_message = f"{len(unprocessed_batches)}/{total_launched} batches were not processed successfully (all attempts were either skipped or failed)."
+                log_and_update(error_message, 100, status=TASK_STATUS_FAILURE, details={"error": error_message, "unprocessed_batch_ids": unprocessed_batches})
+                raise Exception(error_message)
 
             log_and_update("All batches completed successfully.", 100, status=TASK_STATUS_SUCCESS)
 
         except Exception as e:
             logger.error(f"{log_prefix} An unexpected error occurred in main sync task: {e}", exc_info=True)
-            log_and_update(f"Error: {e}", 100, status=TASK_STATUS_FAILURE, details={"error": str(e), "traceback": traceback.format_exc()})
+            # The final log_and_update is now handled inside the robust check for unprocessed_batches
+            # but we keep this for other unexpected exceptions.
+            if not get_task_info_from_db(current_task_id) or get_task_info_from_db(current_task_id).get('status') != TASK_STATUS_FAILURE:
+                 log_and_update(f"Error: {e}", 100, status=TASK_STATUS_FAILURE, details={"error": str(e), "traceback": traceback.format_exc()})
             raise
