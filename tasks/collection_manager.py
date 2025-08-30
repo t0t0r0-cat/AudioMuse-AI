@@ -158,8 +158,6 @@ def sync_album_batch_task(parent_task_id, album_batch, pocketbase_url, pocketbas
                     logger.debug(f"{log_prefix} No action needed for '{title}' by '{artist}' (State: Local={is_present_locally}, Remote={is_present_remotely}).")
 
             if batch_requests_to_upload:
-                # MODIFIED: Chunk the batch requests to avoid server-side timeouts or payload size limits.
-                # A chunk size of 50 means 25 songs (1 embedding + 1 score per song).
                 REQUEST_CHUNK_SIZE = 50 
                 request_chunks = [batch_requests_to_upload[i:i + REQUEST_CHUNK_SIZE] for i in range(0, len(batch_requests_to_upload), REQUEST_CHUNK_SIZE)]
                 
@@ -172,7 +170,6 @@ def sync_album_batch_task(parent_task_id, album_batch, pocketbase_url, pocketbas
                         pb_client.submit_batch_request(chunk)
                     except requests.exceptions.HTTPError as e:
                         logger.warning(f"{log_prefix} Atomic batch upload for chunk {i+1} failed and was rolled back. Details: {e.response.text if e.response else str(e)}")
-                        # For robustness, we log the warning and continue with other chunks.
 
             save_task_status(task_id, "album_batch_sync", TASK_STATUS_SUCCESS, parent_task_id=parent_task_id, sub_type_identifier=lock_id, progress=100, details={"message": "Batch processed successfully."})
 
@@ -230,6 +227,27 @@ def sync_collections_task(url, email, password, num_albums):
         try:
             log_and_update("Starting collection synchronization...", 0, status=TASK_STATUS_STARTED)
             
+            # --- STATEFUL RETRY LOGIC ---
+            log_and_update("Checking for existing sub-tasks for potential retry...", 2)
+            all_child_tasks_initial = get_child_tasks_from_db(current_task_id)
+            processed_batch_identifiers = set()
+            for task in all_child_tasks_initial:
+                details_dict = {}
+                details_str = task.get('details')
+                if details_str and isinstance(details_str, str):
+                    try:
+                        details_dict = json.loads(details_str)
+                    except json.JSONDecodeError:
+                        pass
+                
+                if (task.get('status') == TASK_STATUS_SUCCESS and "Skipped" not in details_dict.get('message', '')):
+                    if task.get('sub_type_identifier'):
+                        processed_batch_identifiers.add(task.get('sub_type_identifier'))
+
+            if processed_batch_identifiers:
+                log_and_update(f"Found {len(processed_batch_identifiers)} already completed batches from a previous run. They will be skipped.", 3)
+            # --- END STATEFUL RETRY LOGIC ---
+
             pb_client = PocketBaseClient(base_url=url, email=email, password=password, log_prefix=log_prefix)
 
             try:
@@ -257,13 +275,19 @@ def sync_collections_task(url, email, password, num_albums):
             total_chunks = len(album_chunks)
             launched_jobs = []
             
-            log_and_update(f"Found {total_albums} albums. Preparing to queue {total_chunks} batches...", 10)
-            albums_queued_so_far = 0
+            log_and_update(f"Found {total_albums} albums. Preparing to process {total_chunks} batches...", 10)
+            
+            already_completed_count = 0
             for idx, album_batch in enumerate(album_chunks):
+                batch_album_ids = sorted([a.get('Id') for a in album_batch if a.get('Id')])
+                lock_id = hashlib.sha1(str(batch_album_ids).encode()).hexdigest()
+
+                if lock_id in processed_batch_identifiers:
+                    already_completed_count += 1
+                    continue
+
                 enqueuing_progress = 10 + int(5 * ((idx + 1) / total_chunks))
                 log_and_update(f"Queueing batch {idx + 1}/{total_chunks}...", enqueuing_progress)
-
-                albums_queued_so_far += len(album_batch)
 
                 sub_job = rq_queue_default.enqueue(
                     'tasks.collection_manager.sync_album_batch_task',
@@ -274,11 +298,10 @@ def sync_collections_task(url, email, password, num_albums):
                 )
                 launched_jobs.append(sub_job)
 
-            total_launched = len(launched_jobs)
-            log_and_update(f"All {total_launched} batches queued. Monitoring for completion...", 15)
+            total_newly_launched = len(launched_jobs)
+            log_and_update(f"Skipped {already_completed_count} completed batches. Queued {total_newly_launched} new batches for processing.", 15)
 
-            completed_sub_tasks_count = 0
-            while completed_sub_tasks_count < total_launched:
+            while True:
                 main_task_info = get_task_info_from_db(current_task_id)
                 if main_task_info and main_task_info.get('status') == TASK_STATUS_REVOKED:
                     log_and_update("Main task revoked. Stopping monitoring.", 99)
@@ -289,17 +312,17 @@ def sync_collections_task(url, email, password, num_albums):
                     t for t in all_child_tasks 
                     if t.get('status') in [TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED]
                 ]
-                completed_sub_tasks_count = len(finished_tasks)
+                total_finished_count = len(finished_tasks)
 
-                if total_launched > 0:
-                    progress = 15 + int(80 * (completed_sub_tasks_count / total_launched))
+                if total_chunks > 0:
+                    progress = 15 + int(80 * (total_finished_count / total_chunks))
                 else:
                     progress = 100
 
-                status_message = f"Monitoring... {completed_sub_tasks_count}/{total_launched} batches completed."
+                status_message = f"Monitoring... {total_finished_count}/{total_chunks} batches completed."
                 log_and_update(status_message, progress)
                 
-                if completed_sub_tasks_count >= total_launched:
+                if total_finished_count >= total_chunks:
                     break
                 
                 time.sleep(5)
@@ -344,17 +367,16 @@ def sync_collections_task(url, email, password, num_albums):
                         {"batch_id": batch_id, "error": "Batch was skipped or status was inconclusive."})
 
             if unprocessed_batches_info:
-                error_summary = f"{len(unprocessed_batches_info)}/{total_launched} batches failed."
+                success_summary = f"Synchronization complete with {len(unprocessed_batches_info)}/{total_chunks} failed batches."
                 detailed_errors = [
                     f"  - Batch '{info.get('batch_name', 'N/A')}' failed in task {info.get('task_id', 'N/A')} with error: {info.get('error', 'N/A').splitlines()[0]}" 
                     for info in unprocessed_batches_info
                 ]
-                full_error_message = f"{error_summary}\n\nReasons:\n" + "\n".join(detailed_errors)
+                full_success_message = f"{success_summary}\n\nDetails of failed batches:\n" + "\n".join(detailed_errors)
                 
-                log_and_update(error_summary, 100, status=TASK_STATUS_FAILURE, details={"error": full_error_message, "unprocessed_batches": unprocessed_batches_info})
-                raise Exception(full_error_message)
-
-            log_and_update("All batches completed successfully.", 100, status=TASK_STATUS_SUCCESS)
+                log_and_update(success_summary, 100, status=TASK_STATUS_SUCCESS, details={"message": full_success_message, "unprocessed_batches": unprocessed_batches_info})
+            else:
+                log_and_update("All batches completed successfully.", 100, status=TASK_STATUS_SUCCESS)
 
         except Exception as e:
             logger.error(f"{log_prefix} An unexpected error occurred in main sync task: {e}", exc_info=True)
