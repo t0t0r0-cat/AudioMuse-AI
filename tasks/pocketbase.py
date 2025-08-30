@@ -54,7 +54,20 @@ class PocketBaseClient:
             logger.info(f"{self.log_prefix} Successfully authenticated.")
             return True
         except requests.exceptions.RequestException as e:
-            error_body = e.response.text if hasattr(e, 'response') and e.response else "No response body"
+            error_body = ""
+            if hasattr(e, 'response') and e.response and hasattr(e.response, 'text'):
+                try:
+                    # Try to parse JSON for cleaner logging
+                    error_json = e.response.json()
+                    if "already existing" in str(error_json):
+                         error_body = "already existing song"
+                    else:
+                        error_body = json.dumps(error_json)
+                except json.JSONDecodeError:
+                    error_body = e.response.text
+            else:
+                error_body = "No response body"
+
             error_message = f"Failed to authenticate: {e} | Body: {error_body}"
             logger.error(f"{self.log_prefix} {error_message}")
             raise ConnectionError(error_message) from e
@@ -82,15 +95,15 @@ class PocketBaseClient:
         except requests.exceptions.RequestException as e:
             logger.error(f"{self.log_prefix} API request failed for {method} {endpoint}: {e}")
             if hasattr(e, 'response') and e.response is not None:
+                # Custom logging for batch request failures
                 response_text = e.response.text
-                if "validation_not_unique" in response_text:
-                    logger.warning(f"{self.log_prefix} Request failed, likely due to an already existing song.")
+                if "already existing" in response_text:
+                    logger.warning(f"{self.log_prefix} Batch request failed because one or more songs already exist.")
                 else:
                     logger.error(f"{self.log_prefix} Response status: {e.response.status_code}, body: {response_text}")
             raise
 
     def _sanitize_for_filter(self, value):
-        # Escape backslashes first, then quotes
         return value.replace('\\', '\\\\').replace('"', '\\"')
 
     def get_records_by_artists(self, artists, collection):
@@ -102,69 +115,41 @@ class PocketBaseClient:
         
         endpoint = f"/api/collections/{collection}/records"
         
-        # Chunk artists to keep URL length reasonable
         ARTIST_CHUNK_SIZE = 5
         all_records = []
         
         artist_chunks = [artists[i:i + ARTIST_CHUNK_SIZE] for i in range(0, len(artists), ARTIST_CHUNK_SIZE)]
 
         for chunk in artist_chunks:
-            filter_parts = []
-            for artist in chunk:
-                sanitized_artist = self._sanitize_for_filter(artist)
-                filter_parts.append(f'artist="{sanitized_artist}"')
-
+            filter_parts = [f'artist="{self._sanitize_for_filter(artist)}"' for artist in chunk]
             filter_query = " || ".join(filter_parts)
             
-            # Use a large perPage value since we are filtering by a limited number of artists
-            params = {
-                'filter': filter_query,
-                'perPage': 500, 
-            }
+            params = { 'filter': filter_query, 'perPage': 500 }
             
             try:
                 response_data = self._make_request('GET', endpoint, params=params)
                 all_records.extend(response_data.get('items', []))
             except requests.exceptions.RequestException as e:
                 logger.error(f"{self.log_prefix} FATAL: Could not retrieve records from '{collection}' for artists. Reason: {e}")
-                raise e # Re-raise to fail the task
+                raise e
         
         return all_records
 
-    def create_records_batch(self, records, collection):
+    def submit_batch_request(self, requests_payload):
         """
-        Creates multiple records in a specified collection using a single batch API call.
+        Submits a generic batch request. This is transactional on the PocketBase side.
+        If any request in the batch fails, the entire transaction is rolled back.
         """
-        if not records:
+        if not requests_payload:
             return True
 
         batch_endpoint = "/api/batch"
-        requests_payload = []
-        for record in records:
-            # Create a copy to modify
-            processed_body = record.copy()
-            
-            # The 'embedding' field in the 'embedding' collection must be a JSON string.
-            # The 'embedding' field does not exist in the 'score' collection, so this is safe.
-            if 'embedding' in processed_body and isinstance(processed_body['embedding'], list):
-                processed_body['embedding'] = json.dumps(processed_body['embedding'])
-
-            requests_payload.append({
-                "method": "POST",
-                "url": f"/api/collections/{collection}/records",
-                "body": processed_body
-            })
-
         payload = {"requests": requests_payload}
         
-        # This is a critical write operation, so we don't use the built-in retry
-        # and instead handle it with specific logic in the calling task.
-        # We re-raise the exception to allow the task to decide how to handle it.
         try:
             self._make_request('POST', batch_endpoint, json=payload)
-            logger.info(f"{self.log_prefix} Successfully submitted batch request for {len(records)} records to collection '{collection}'.")
+            logger.info(f"{self.log_prefix} Successfully submitted batch request for {len(requests_payload)} operations.")
         except requests.exceptions.RequestException:
-             # The detailed error is already logged in _make_request, just re-raise
-            logger.error(f"{self.log_prefix} The entire batch request to collection '{collection}' failed.")
+            logger.error(f"{self.log_prefix} The entire batch request failed and was rolled back.")
             raise
 

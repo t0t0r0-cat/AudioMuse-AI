@@ -49,7 +49,6 @@ def sync_album_batch_task(parent_task_id, album_batch, pocketbase_url, pocketbas
 
     with app.app_context():
         # --- Cancellation Check ---
-        # Check if the parent task has been revoked before starting any work.
         parent_info = get_task_info_from_db(parent_task_id)
         if parent_info and parent_info.get('status') == TASK_STATUS_REVOKED:
             logger.warning(f"{log_prefix} Parent task was revoked. Cancelling this sub-task.")
@@ -94,8 +93,7 @@ def sync_album_batch_task(parent_task_id, album_batch, pocketbase_url, pocketbas
             local_tracks_data = get_tracks_by_ids(all_track_ids)
             local_tracks_map = {t['item_id']: t for t in local_tracks_data}
 
-            embeddings_to_upload = []
-            scores_to_upload = []
+            batch_requests_to_upload = []
 
             for remote_key, track in unique_songs.items():
                 track_id = track['Id']
@@ -103,25 +101,33 @@ def sync_album_batch_task(parent_task_id, album_batch, pocketbase_url, pocketbas
                 title = track.get('Name')
                 
                 local_track_data = local_tracks_map.get(track_id)
-                # An item is considered "present locally" if its embedding vector has been calculated and stored.
                 is_present_locally = local_track_data and local_track_data.get('embedding_vector') is not None and local_track_data['embedding_vector'].size > 0
                 is_present_remotely = remote_key in remote_embedding_map
 
-                # Case 1: Present locally, not present remotely => UPLOAD
                 if is_present_locally and not is_present_remotely:
-                    embeddings_to_upload.append({
+                    embedding_body = {
                         "artist": artist, "title": title,
-                        "embedding": local_track_data['embedding_vector'].tolist()
+                        "embedding": json.dumps(local_track_data['embedding_vector'].tolist())
+                    }
+                    batch_requests_to_upload.append({
+                        "method": "POST",
+                        "url": "/api/collections/embedding/records",
+                        "body": embedding_body
                     })
-                    scores_to_upload.append({
+
+                    score_body = {
                         "title": title, "artist": artist,
                         "tempo": local_track_data.get('tempo'), "key": local_track_data.get('key'),
                         "scale": local_track_data.get('scale'), "mood_vector": local_track_data.get('mood_vector'),
                         "energy": local_track_data.get('energy'), "other_features": local_track_data.get('other_features')
+                    }
+                    batch_requests_to_upload.append({
+                        "method": "POST",
+                        "url": "/api/collections/score/records",
+                        "body": score_body
                     })
-                    logger.info(f"{log_prefix} Queued for upload: '{title}' by '{artist}'.")
+                    logger.info(f"{log_prefix} Queued for atomic upload: '{title}' by '{artist}'.")
 
-                # Case 2: Not present locally, present remotely => DOWNLOAD
                 elif not is_present_locally and is_present_remotely:
                     remote_embedding_record = remote_embedding_map.get(remote_key)
                     remote_score_record = remote_score_map.get(remote_key)
@@ -148,35 +154,40 @@ def sync_album_batch_task(parent_task_id, album_batch, pocketbase_url, pocketbas
                         except (json.JSONDecodeError, TypeError) as e:
                             logger.warning(f"{log_prefix} Could not parse/process remote record for '{title}'. Skipping sync-down. Error: {e}")
                 
-                # Case 3 & 4: (Present locally, present remotely) OR (Not present locally, not present remotely) => DO NOTHING
                 else:
                     logger.debug(f"{log_prefix} No action needed for '{title}' by '{artist}' (State: Local={is_present_locally}, Remote={is_present_remotely}).")
 
-            
-            try:
-                if embeddings_to_upload:
-                    logger.info(f"{log_prefix} Uploading {len(embeddings_to_upload)} new embedding records...")
-                    pb_client.create_records_batch(embeddings_to_upload, collection='embedding')
-            except requests.exceptions.HTTPError as e:
-                logger.warning(f"{log_prefix} A non-critical error occurred during embedding batch upload. Details: {e.response.text if e.response else str(e)}")
+            if batch_requests_to_upload:
+                # MODIFIED: Chunk the batch requests to avoid server-side timeouts or payload size limits.
+                # A chunk size of 50 means 25 songs (1 embedding + 1 score per song).
+                REQUEST_CHUNK_SIZE = 50 
+                request_chunks = [batch_requests_to_upload[i:i + REQUEST_CHUNK_SIZE] for i in range(0, len(batch_requests_to_upload), REQUEST_CHUNK_SIZE)]
+                
+                logger.info(f"{log_prefix} Total requests to upload: {len(batch_requests_to_upload)}. Split into {len(request_chunks)} chunks.")
 
-            try:
-                if scores_to_upload:
-                    logger.info(f"{log_prefix} Uploading {len(scores_to_upload)} new score records...")
-                    pb_client.create_records_batch(scores_to_upload, collection='score')
-            except requests.exceptions.HTTPError as e:
-                logger.warning(f"{log_prefix} A non-critical error occurred during score batch upload. Details: {e.response.text if e.response else str(e)}")
+                for i, chunk in enumerate(request_chunks):
+                    try:
+                        num_songs_in_chunk = len(chunk) // 2
+                        logger.info(f"{log_prefix} Atomically uploading chunk {i+1}/{len(request_chunks)} with {num_songs_in_chunk} songs...")
+                        pb_client.submit_batch_request(chunk)
+                    except requests.exceptions.HTTPError as e:
+                        logger.warning(f"{log_prefix} Atomic batch upload for chunk {i+1} failed and was rolled back. Details: {e.response.text if e.response else str(e)}")
+                        # For robustness, we log the warning and continue with other chunks.
 
             save_task_status(task_id, "album_batch_sync", TASK_STATUS_SUCCESS, parent_task_id=parent_task_id, sub_type_identifier=lock_id, progress=100, details={"message": "Batch processed successfully."})
 
         except Exception as e:
             logger.error(f"{log_prefix} Error in sync_album_batch_task: {e}", exc_info=True)
-            save_task_status(task_id, "album_batch_sync", TASK_STATUS_FAILURE, parent_task_id=parent_task_id, sub_type_identifier=lock_id, details={"error": str(e), "traceback": traceback.format_exc()})
+            failure_details = {
+                "error": str(e), 
+                "traceback": traceback.format_exc(),
+                "batch_name": batch_name_short 
+            }
+            save_task_status(task_id, "album_batch_sync", TASK_STATUS_FAILURE, parent_task_id=parent_task_id, sub_type_identifier=lock_id, details=failure_details)
             raise
         finally:
             if is_batch_lock_acquired:
                 try:
-                    # Atomically check and release the main batch lock
                     released = redis_conn.eval(LUA_SAFE_RELEASE_LOCK_SCRIPT, 1, batch_lock_key, task_id)
                     if released:
                         logger.info(f"{log_prefix} Safely released batch lock: {batch_lock_key}")
@@ -198,24 +209,19 @@ def sync_collections_task(url, email, password, num_albums):
     with app.app_context():
         def log_and_update(message, progress, status=TASK_STATUS_PROGRESS, **kwargs):
             logger.info(f"{log_prefix} {message}")
-            # Ensure details are always a dictionary
             current_task_info = get_task_info_from_db(current_task_id)
             db_details = {}
             if current_task_info and current_task_info.get('details'):
                 try:
-                    # The details from DB are a JSON string, so we need to parse it.
                     db_details = json.loads(current_task_info['details'])
                 except (json.JSONDecodeError, TypeError):
-                    # If parsing fails, it might be a raw string. Handle it gracefully.
                     db_details = {"raw_details": current_task_info['details']}
 
-            # Append new log message to existing log list in details
             log_entry = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {message}"
             if 'log' not in db_details or not isinstance(db_details.get('log'), list):
                 db_details['log'] = []
             db_details['log'].append(log_entry)
             
-            # --- Smartly merge new details from kwargs ---
             if 'details' in kwargs:
                 db_details.update(kwargs['details'])
 
@@ -307,9 +313,11 @@ def sync_collections_task(url, email, password, num_albums):
                 if batch_id:
                     tasks_by_batch.setdefault(batch_id, []).append(task)
 
-            unprocessed_batches = []
+            unprocessed_batches_info = []
             for batch_id, tasks in tasks_by_batch.items():
                 is_processed = False
+                final_failure_details = None
+
                 for t in tasks:
                     details_dict = {}
                     details_str = t.get('details')
@@ -319,19 +327,32 @@ def sync_collections_task(url, email, password, num_albums):
                         except json.JSONDecodeError:
                             logger.warning(f"Could not parse details JSON for sub-task {t.get('task_id')}")
 
-                    # A batch is successfully processed if any of its attempts succeeded without being skipped.
                     if (t.get('status') == TASK_STATUS_SUCCESS and 
                             "Skipped" not in details_dict.get('message', '')):
                         is_processed = True
-                        break # Found a successful run for this batch.
+                        break 
+                    
+                    if t.get('status') == TASK_STATUS_FAILURE:
+                        final_failure_details = {
+                            "task_id": t.get('task_id'),
+                            "error": details_dict.get('error', 'Unknown error'),
+                            "batch_name": details_dict.get('batch_name', 'Unknown Batch')
+                        }
                 
                 if not is_processed:
-                    unprocessed_batches.append(batch_id)
+                    unprocessed_batches_info.append(final_failure_details or 
+                        {"batch_id": batch_id, "error": "Batch was skipped or status was inconclusive."})
 
-            if unprocessed_batches:
-                error_message = f"{len(unprocessed_batches)}/{total_launched} batches were not processed successfully (all attempts were either skipped or failed)."
-                log_and_update(error_message, 100, status=TASK_STATUS_FAILURE, details={"error": error_message, "unprocessed_batch_ids": unprocessed_batches})
-                raise Exception(error_message)
+            if unprocessed_batches_info:
+                error_summary = f"{len(unprocessed_batches_info)}/{total_launched} batches failed."
+                detailed_errors = [
+                    f"  - Batch '{info.get('batch_name', 'N/A')}' failed in task {info.get('task_id', 'N/A')} with error: {info.get('error', 'N/A').splitlines()[0]}" 
+                    for info in unprocessed_batches_info
+                ]
+                full_error_message = f"{error_summary}\n\nReasons:\n" + "\n".join(detailed_errors)
+                
+                log_and_update(error_summary, 100, status=TASK_STATUS_FAILURE, details={"error": full_error_message, "unprocessed_batches": unprocessed_batches_info})
+                raise Exception(full_error_message)
 
             log_and_update("All batches completed successfully.", 100, status=TASK_STATUS_SUCCESS)
 
