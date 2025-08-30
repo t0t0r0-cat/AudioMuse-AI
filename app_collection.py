@@ -1,9 +1,13 @@
 # app_collection.py
-from flask import Blueprint, jsonify, request, render_template
+from flask import Blueprint, jsonify, request, render_template, g
 import uuid
 import logging
+import json
+import time
 
 from rq import Retry
+from psycopg2.extras import DictCursor
+
 
 logger = logging.getLogger(__name__)
 
@@ -21,11 +25,14 @@ def start_collection_sync():
     This enqueues the main parent task for the synchronization.
     """
     # Local import to avoid circular dependency
-    from app import save_task_status, TASK_STATUS_PENDING, rq_queue_high
+    from app import save_task_status, TASK_STATUS_PENDING, rq_queue_high, clean_successful_task_details_on_new_start
 
     data = request.json
     if not data or not all(k in data for k in ['url', 'email', 'password', 'num_albums']):
         return jsonify({"message": "Missing required parameters: url, email, password, num_albums"}), 400
+    
+    # Clean up previously successful sync tasks before starting a new one
+    clean_successful_task_details_on_new_start()
 
     pocketbase_url = data['url']
     user_email = data['email']
@@ -57,3 +64,49 @@ def start_collection_sync():
         "task_type": "main_collection_sync",
         "status": job.get_status()
     }), 202
+
+@collection_bp.route('/api/collection/last_task', methods=['GET'])
+def get_last_collection_task():
+    """
+    Get the status of the most recent collection sync task.
+    """
+    from app import get_db # Local import to use the app context's db connection
+    db = get_db()
+    cur = db.cursor(cursor_factory=DictCursor)
+    cur.execute("""
+        SELECT task_id, task_type, status, progress, details, start_time, end_time
+        FROM task_status 
+        WHERE task_type = 'main_collection_sync'
+        ORDER BY timestamp DESC 
+        LIMIT 1
+    """)
+    last_task_row = cur.fetchone()
+    cur.close()
+
+    if last_task_row:
+        last_task_data = dict(last_task_row)
+        
+        # Safely parse details
+        if last_task_data.get('details'):
+            try:
+                details_val = last_task_data['details']
+                last_task_data['details'] = json.loads(details_val) if isinstance(details_val, str) else details_val
+            except (json.JSONDecodeError, TypeError):
+                 last_task_data['details'] = {"error": "Could not parse details."}
+
+        # Calculate running time
+        start_time = last_task_data.get('start_time')
+        end_time = last_task_data.get('end_time')
+        if start_time:
+            effective_end_time = end_time if end_time is not None else time.time()
+            last_task_data['running_time_seconds'] = max(0, effective_end_time - start_time)
+        else:
+            last_task_data['running_time_seconds'] = 0.0
+        
+        last_task_data.pop('start_time', None)
+        last_task_data.pop('end_time', None)
+
+        return jsonify(last_task_data), 200
+        
+    return jsonify({"status": "NO_PREVIOUS_TASK"}), 200
+

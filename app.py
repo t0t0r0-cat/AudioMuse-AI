@@ -233,57 +233,53 @@ with app.app_context():
 # --- DB Cleanup Utility ---
 def clean_successful_task_details_on_new_start():
     """
-    Cleans the 'details' field (specifically 'log' and 'log_storage_info')
-    for all tasks in the database that are marked as SUCCESS.
-    This is typically called when a new main task starts.
-    This function will now change the status of these tasks to REVOKED
-    and update their details to a minimal archival message.
+    Cleans the 'details' field for all MAIN tasks in the database
+    that are marked as SUCCESS. This archives them by setting their status to REVOKED.
+    A main task is identified by having a NULL parent_task_id.
     """
     db = get_db()
     cur = db.cursor(cursor_factory=DictCursor)
-    app.logger.info("Starting archival of previously successful tasks (setting status to REVOKED and pruning details).")
+    app.logger.info("Starting archival of all previously successful main tasks.")
     try:
-        # Select tasks that are currently marked as SUCCESS
-        cur.execute("SELECT task_id, details FROM task_status WHERE status = %s", (TASK_STATUS_SUCCESS,))
+        # A main task is one without a parent.
+        cur.execute("SELECT task_id, details, task_type FROM task_status WHERE status = %s AND parent_task_id IS NULL", (TASK_STATUS_SUCCESS,))
         tasks_to_archive = cur.fetchall()
 
         archived_count = 0
         for task_row in tasks_to_archive:
             task_id = task_row['task_id']
             original_details_json = task_row['details']
-            original_status_message = "Task completed successfully." # Default
+            original_status_message = "Task completed successfully."
 
             if original_details_json:
                 try:
                     original_details_dict = json.loads(original_details_json)
                     original_status_message = original_details_dict.get("status_message", original_status_message)
-                except json.JSONDecodeError:
-                    app.logger.warning(f"Could not parse original details JSON for task {task_id} during archival. Using default status message.")
+                except (json.JSONDecodeError, TypeError):
+                     app.logger.warning(f"Could not parse original details for task {task_id} during archival.")
 
-            # New minimal details for the archived task
             archived_details = {
                 "log": [f"[Archived] Task was previously successful. Original summary: {original_status_message}"],
-                "original_status_before_archival": TASK_STATUS_SUCCESS, # Keep a record of its original success
+                "original_status_before_archival": TASK_STATUS_SUCCESS,
                 "archival_reason": "New main task started, old successful task archived."
             }
             archived_details_json = json.dumps(archived_details)
 
-            # Update status to REVOKED, set new minimal details, progress to 100, and update timestamp
             with db.cursor() as update_cur:
                 update_cur.execute(
                     "UPDATE task_status SET status = %s, details = %s, progress = 100, timestamp = NOW() WHERE task_id = %s AND status = %s",
-                    (TASK_STATUS_REVOKED, archived_details_json, task_id, TASK_STATUS_SUCCESS) # Ensure we only update tasks that are still SUCCESS
+                    (TASK_STATUS_REVOKED, archived_details_json, task_id, TASK_STATUS_SUCCESS)
                 )
             archived_count += 1
 
         if archived_count > 0:
             db.commit()
-            app.logger.info(f"Archived (set to REVOKED and pruned details for) {archived_count} previously successful tasks.")
+            app.logger.info(f"Archived {archived_count} previously successful main tasks.")
         else:
-            app.logger.info("No previously successful tasks found to archive.")
+            app.logger.info("No previously successful main tasks found to archive.")
     except Exception as e_main_clean:
-        db.rollback() # Rollback in case of error during the main query or commit
-        app.logger.error(f"Error during the task archival process: {e_main_clean}")
+        db.rollback()
+        app.logger.error(f"Error during the main task archival process: {e_main_clean}")
     finally:
         cur.close()
 
@@ -381,7 +377,7 @@ def get_child_tasks_from_db(parent_task_id):
     conn = get_db()
     cur = conn.cursor(cursor_factory=DictCursor)
     # Select the task_id which is the job_id, and other necessary fields
-    cur.execute("SELECT task_id, status, sub_type_identifier FROM task_status WHERE parent_task_id = %s", (parent_task_id,))
+    cur.execute("SELECT task_id, status, sub_type_identifier, details FROM task_status WHERE parent_task_id = %s", (parent_task_id,))
     tasks = cur.fetchall()
     cur.close()
     # DictCursor returns a list of dictionary-like objects, convert to plain dicts
@@ -663,7 +659,16 @@ def get_task_status_endpoint(task_id):
             response['state'] = db_task_info.get('status', response['state']) # Use DB status if RQ is still active
 
         response['progress'] = db_task_info.get('progress', response['progress'])
-        db_details = json.loads(db_task_info.get('details')) if db_task_info.get('details') else {}
+        
+        db_details = {}
+        db_details_raw = db_task_info.get('details')
+        if db_details_raw:
+            try:
+                # If it's a string, load it as JSON. If it's already a dict, use it.
+                db_details = json.loads(db_details_raw) if isinstance(db_details_raw, str) else db_details_raw
+            except (json.JSONDecodeError, TypeError):
+                 db_details = {"raw_details": db_details_raw, "error": "Failed to parse details."}
+
         # Merge details: RQ meta (live) can override DB details (persisted)
         response['details'] = {**db_details, **response['details']}
 
@@ -867,7 +872,7 @@ def get_last_overall_task_status_endpoint():
         last_task_data = dict(last_task_row)
         if last_task_data.get('details'):
             try: last_task_data['details'] = json.loads(last_task_data['details'])
-            except json.JSONDecodeError: pass
+            except (json.JSONDecodeError, TypeError): pass
 
         # Calculate running time in Python
         start_time = last_task_data.get('start_time')
@@ -930,7 +935,7 @@ def get_active_tasks_endpoint():
                        isinstance(task_item['details']['best_params']['clustering_method_config']['params'], dict):
                         task_item['details']['best_params']['clustering_method_config']['params'].pop('initial_centroids', None)
 
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, TypeError):
                 task_item['details'] = {"raw_details": task_item['details'], "error": "Failed to parse details JSON."}
 
         # Clean up raw time columns before sending response

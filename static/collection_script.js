@@ -42,16 +42,30 @@ document.addEventListener('DOMContentLoaded', () => {
      * @param {object} task - The task object with status details.
      */
     function displayTaskStatus(task) {
-        statusTaskId.textContent = task.task_id || 'N/A';
+        if (!task || !task.task_id) {
+            // Reset UI to default state if no task data
+            statusTaskId.textContent = 'N/A';
+            statusRunningTime.textContent = '-- : -- : --';
+            statusTaskType.textContent = 'N/A';
+            statusStatus.textContent = 'IDLE';
+            statusProgress.textContent = '0';
+            progressBar.style.width = '0%';
+            statusLog.textContent = 'No active or recent task found.';
+            statusDetails.textContent = '';
+            statusStatus.className = 'status-text status-idle';
+            return;
+        }
+
+        statusTaskId.textContent = task.task_id;
         statusRunningTime.textContent = formatRunningTime(task.running_time_seconds);
         statusTaskType.textContent = task.task_type_from_db || task.task_type || 'N/A';
+        // FIX: Check for 'state' from the polling API and 'status' from the initial load API.
         const stateUpper = (task.state || task.status || 'IDLE').toUpperCase();
         statusStatus.textContent = stateUpper;
         statusProgress.textContent = task.progress || 0;
         progressBar.style.width = `${task.progress || 0}%`;
 
         // Update status color
-        statusStatus.className = 'status-text';
         let statusClass = 'status-idle';
         if (['SUCCESS', 'FINISHED'].includes(stateUpper)) {
             statusClass = 'status-success';
@@ -60,16 +74,21 @@ document.addEventListener('DOMContentLoaded', () => {
         } else if (['PENDING', 'STARTED', 'PROGRESS'].includes(stateUpper)) {
             statusClass = 'status-pending';
         }
-        statusStatus.classList.add('status-status', statusClass);
+        statusStatus.className = `status-text ${statusClass}`;
 
         // Update log and details
         let statusMessage = 'N/A';
-        if (task.details) {
-            statusMessage = task.details.status_message || (Array.isArray(task.details.log) && task.details.log.length > 0 ? task.details.log[task.details.log.length - 1] : task.details.message || 'N/A');
+        if (task.details && typeof task.details === 'object') {
+            statusMessage = (Array.isArray(task.details.log) && task.details.log.length > 0) ?
+                task.details.log[task.details.log.length - 1] :
+                (task.details.message || 'No message.');
+        } else if (task.details) {
+            statusMessage = task.details.toString();
         }
         statusLog.textContent = statusMessage;
         statusDetails.textContent = typeof task.details === 'object' ? JSON.stringify(task.details, null, 2) : task.details;
     }
+
 
     /**
      * Starts polling for the status of a given task ID.
@@ -81,12 +100,12 @@ document.addEventListener('DOMContentLoaded', () => {
         currentTaskId = taskId;
         updateButtonStates(true);
 
-        statusInterval = setInterval(async () => {
+        const poll = async () => {
+            if (!currentTaskId) return;
             try {
                 const response = await fetch(`/api/status/${currentTaskId}`);
-                if (!response.ok) {
-                    throw new Error(`Server responded with status ${response.status}`);
-                }
+                if (!response.ok) throw new Error(`Server responded with status ${response.status}`);
+                
                 const taskStatus = await response.json();
                 displayTaskStatus(taskStatus);
 
@@ -97,10 +116,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             } catch (error) {
                 console.error('Error polling task status:', error);
-                displayTaskStatus({ state: 'ERROR', details: `Polling error: ${error.message}` });
+                displayTaskStatus({ task_id: currentTaskId, status: 'ERROR', details: `Polling error: ${error.message}` });
                 stopPolling();
             }
-        }, 3000);
+        };
+        
+        poll(); // Immediate poll
+        statusInterval = setInterval(poll, 3000);
     }
 
     /**
@@ -111,7 +133,7 @@ document.addEventListener('DOMContentLoaded', () => {
             clearInterval(statusInterval);
             statusInterval = null;
         }
-        currentTaskId = null;
+        // Don't clear currentTaskId here, so we can still cancel a finished but failed task
         updateButtonStates(false);
     }
 
@@ -121,7 +143,7 @@ document.addEventListener('DOMContentLoaded', () => {
      */
     function updateButtonStates(isTaskRunning) {
         startSyncBtn.disabled = isTaskRunning;
-        cancelSyncBtn.disabled = !isTaskRunning;
+        cancelSyncBtn.disabled = !isTaskRunning || !currentTaskId;
     }
 
     /**
@@ -175,13 +197,45 @@ document.addEventListener('DOMContentLoaded', () => {
                 throw new Error(result.message || 'Failed to send cancellation request.');
             }
             showMessageBox('Cancellation Sent', result.message);
-            // Polling will handle the final status update.
+            // Polling will handle the final status update and stop itself.
         } catch (error) {
             console.error('Error cancelling task:', error);
             showMessageBox('Error', `Could not cancel task: ${error.message}`);
-            cancelSyncBtn.disabled = false; // Re-enable if cancellation failed
+            // Re-enable button only if the task is still considered active.
+            updateButtonStates(!!statusInterval);
         }
     }
+    
+    /**
+     * Checks for the last known collection sync task on page load.
+     */
+    async function checkForExistingTask() {
+        try {
+            const response = await fetch('/api/collection/last_task');
+            if (!response.ok) throw new Error('Failed to fetch last task status.');
+
+            const task = await response.json();
+            if (task && task.task_id && task.status !== 'NO_PREVIOUS_TASK') {
+                currentTaskId = task.task_id;
+                displayTaskStatus(task);
+
+                const stateUpper = (task.status || '').toUpperCase();
+                const isRunning = ['PENDING', 'STARTED', 'PROGRESS'].includes(stateUpper);
+                if (isRunning) {
+                    startPolling(task.task_id);
+                } else {
+                    updateButtonStates(false); // Task is finished, so buttons are in idle state
+                }
+            } else {
+                 updateButtonStates(false); // No task found
+            }
+        } catch (error) {
+            console.error('Error checking for existing task:', error);
+            showMessageBox('Error', 'Could not retrieve status of the last sync task.');
+            updateButtonStates(false);
+        }
+    }
+
 
     /**
      * Shows a temporary message box in the corner of the screen.
@@ -202,5 +256,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Event Listeners & Initialization ---
     startSyncBtn.addEventListener('click', startSync);
     cancelSyncBtn.addEventListener('click', cancelSync);
-    updateButtonStates(false); // Initial state
+    
+    checkForExistingTask(); // Check for a task when the page loads
 });
+
