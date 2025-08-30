@@ -55,8 +55,8 @@ def sync_album_batch_task(parent_task_id, album_batch, pocketbase_url, pocketbas
             local_tracks_data = get_tracks_by_ids(all_track_ids)
             local_tracks_map = {t['item_id']: t for t in local_tracks_data}
 
-            # --- NEW: Query PocketBase in smaller chunks to avoid long URLs ---
-            POCKETBASE_QUERY_CHUNK_SIZE = 20
+            # --- MODIFIED: Reduced chunk size to prevent long URLs ---
+            POCKETBASE_QUERY_CHUNK_SIZE = 10
             remote_records = []
             songs_to_check = [{'artist': t.get('AlbumArtist', 'Unknown Artist'), 'title': t.get('Name')} for t in unique_songs.values()]
             
@@ -159,6 +159,7 @@ def sync_collections_task(url, email, password, num_albums):
 
             log_and_update("Authentication successful. Fetching recent albums...", 5)
             albums = get_recent_albums(num_albums)
+            total_albums = len(albums)
 
             if not albums:
                 log_and_update("No recent albums found to sync.", 100, status=TASK_STATUS_SUCCESS)
@@ -168,10 +169,12 @@ def sync_collections_task(url, email, password, num_albums):
             album_chunks = [albums[i:i + ALBUM_BATCH_SIZE] for i in range(0, len(albums), ALBUM_BATCH_SIZE)]
             total_chunks = len(album_chunks)
             launched_jobs = []
+            albums_queued_so_far = 0
 
             for idx, album_batch in enumerate(album_chunks):
+                albums_queued_so_far += len(album_batch)
                 progress = 10 + int(85 * (idx + 1) / total_chunks)
-                log_and_update(f"Queueing sync for album batch {idx + 1}/{total_chunks}", progress)
+                log_and_update(f"Queueing sync for albums {albums_queued_so_far}/{total_albums} (batch {idx + 1}/{total_chunks})", progress)
                 
                 sub_job = rq_queue_default.enqueue(
                     'tasks.collection_manager.sync_album_batch_task',
