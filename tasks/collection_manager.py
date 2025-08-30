@@ -118,19 +118,26 @@ def sync_album_batch_task(parent_task_id, album_batch, pocketbase_url, pocketbas
                     remote_score_record = remote_score_map.get(remote_key)
 
                     if remote_embedding_record and remote_score_record:
-                        embedding_vector = np.array(remote_embedding_record.get('embedding', [])).astype(np.float32)
-                        save_track_embedding(track_id, embedding_vector)
-                        
-                        moods_str = remote_score_record.get('mood_vector', '')
-                        moods = {p.split(':')[0]: float(p.split(':')[1]) for p in moods_str.split(',') if ':' in p} if moods_str else {}
-                        
-                        save_track_analysis(
-                            item_id=track_id, title=title, author=artist,
-                            tempo=remote_score_record.get('tempo'), key=remote_score_record.get('key'),
-                            scale=remote_score_record.get('scale'), moods=moods,
-                            energy=remote_score_record.get('energy'),
-                            other_features=remote_score_record.get('other_features')
-                        )
+                        try:
+                            # --- FIX: Correctly deserialize the embedding JSON string from PocketBase ---
+                            embedding_json = remote_embedding_record.get('embedding', '[]')
+                            embedding_list = json.loads(embedding_json) if embedding_json else []
+                            embedding_vector = np.array(embedding_list).astype(np.float32)
+                            
+                            save_track_embedding(track_id, embedding_vector)
+                            
+                            moods_str = remote_score_record.get('mood_vector', '')
+                            moods = {p.split(':')[0]: float(p.split(':')[1]) for p in moods_str.split(',') if ':' in p} if moods_str else {}
+                            
+                            save_track_analysis(
+                                item_id=track_id, title=title, author=artist,
+                                tempo=remote_score_record.get('tempo'), key=remote_score_record.get('key'),
+                                scale=remote_score_record.get('scale'), moods=moods,
+                                energy=remote_score_record.get('energy'),
+                                other_features=remote_score_record.get('other_features')
+                            )
+                        except (json.JSONDecodeError, TypeError) as e:
+                            logger.warning(f"{log_prefix} Could not parse or process remote record for '{title}'. Skipping sync-down. Error: {e}")
             
             try:
                 if embeddings_to_upload:
@@ -157,8 +164,10 @@ def sync_album_batch_task(parent_task_id, album_batch, pocketbase_url, pocketbas
             raise
         finally:
             if song_locks_acquired:
+                logger.info(f"{log_prefix} Releasing {len(song_locks_acquired)} song locks.")
                 redis_conn.delete(*song_locks_acquired)
             if is_batch_lock_acquired:
+                logger.info(f"{log_prefix} Releasing batch lock: {batch_lock_key}")
                 redis_conn.delete(batch_lock_key)
 
 # --- Main task ---
