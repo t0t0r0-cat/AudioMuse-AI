@@ -56,7 +56,7 @@ def sync_album_batch_task(parent_task_id, album_batch, pocketbase_url, pocketbas
             local_tracks_map = {t['item_id']: t for t in local_tracks_data}
 
             # --- NEW: Query PocketBase in smaller chunks to avoid long URLs ---
-            POCKETBASE_QUERY_CHUNK_SIZE = 40
+            POCKETBASE_QUERY_CHUNK_SIZE = 20
             remote_records = []
             songs_to_check = [{'artist': t.get('AlbumArtist', 'Unknown Artist'), 'title': t.get('Name')} for t in unique_songs.values()]
             
