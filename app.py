@@ -687,88 +687,64 @@ def get_task_status_endpoint(task_id):
 
     return jsonify(response)
 
-def cancel_job_and_children_recursive(job_id, task_type_from_db=None):
+def cancel_job_and_children_recursive(job_id, task_type_from_db=None, reason="Task cancellation processed by API."):
     """Helper to cancel a job and its children based on DB records."""
     cancelled_count = 0
 
-    # First, determine the task_type for the current job_id # type: ignore
+    # First, determine the task_type for the current job_id
     db_task_info = get_task_info_from_db(job_id)
     current_task_type = db_task_info.get('task_type') if db_task_info else task_type_from_db
 
     if not current_task_type:
-        print(f"Warning: Could not determine task_type for job {job_id}. Cannot reliably mark as REVOKED in DB or cancel children.")
-        # Try a best-effort RQ cancel if job_id is known, but DB update for this job is skipped.
+        logger.warning(f"Could not determine task_type for job {job_id}. Cannot reliably mark as REVOKED in DB or cancel children.")
         try:
-            job_rq = Job.fetch(job_id, connection=redis_conn)
-            if not job_rq.is_finished and not job_rq.is_failed and not job_rq.is_canceled:
-                send_stop_job_command(redis_conn, job_id)
-                cancelled_count += 1 # Count this as an action taken
-                print(f"Job {job_id} (task_type unknown) stop command sent to RQ.")
-            # else: Job already in a final state or not running
+            Job.fetch(job_id, connection=redis_conn)
+            send_stop_job_command(redis_conn, job_id)
+            cancelled_count += 1
+            logger.info(f"Job {job_id} (task_type unknown) stop command sent to RQ.")
         except NoSuchJobError:
-            pass # Job not in RQ, nothing to do there for this ID
+            pass
         return cancelled_count
 
-    # If current_task_type is known, proceed with RQ cancellation attempt
+    # Mark as REVOKED in DB for the current job. This is the primary action.
+    save_task_status(job_id, current_task_type, TASK_STATUS_REVOKED, progress=100, details={"message": reason})
+
+    # Attempt to stop the job in RQ. This is a secondary action to interrupt a running process.
     action_taken_in_rq = False
     try:
-        job_rq = Job.fetch(job_id, connection=redis_conn) # type: ignore
+        job_rq = Job.fetch(job_id, connection=redis_conn)
         current_rq_status = job_rq.get_status()
-        logger.info("Job %s (type: %s) found in RQ with status: %s", job_id, current_task_type, current_rq_status)
+        logger.info(f"Job {job_id} (type: {current_task_type}) found in RQ with status: {current_rq_status}")
 
-        if job_rq.is_started:
-            logger.info("  Job %s is STARTED. Attempting to send stop command.", job_id)
-            try:
-                send_stop_job_command(redis_conn, job_id) # This will likely move it to 'failed' in RQ
-                action_taken_in_rq = True
-                logger.info("    Stop command sent for job %s.", job_id)
-            except InvalidJobOperation:
-                logger.warning("    Job %s was in 'started' state but became non-executable for stop command (InvalidJobOperation). Will mark as REVOKED in DB.", job_id)
-            except Exception as e_stop_cmd: # Catch other potential errors from send_stop_job_command
-                logger.error("    Error sending stop command for job %s: %s", job_id, e_stop_cmd)
-        elif not (job_rq.is_finished or job_rq.is_failed or job_rq.is_canceled):
-            # If it's not started, and not in a terminal state (e.g., queued, deferred)
-            logger.info("  Job %s is %s. Attempting to cancel via job.cancel().", job_id, current_rq_status)
-            job_rq.cancel() # This moves it to 'canceled' status in RQ
+        if not job_rq.is_finished and not job_rq.is_failed and not job_rq.is_canceled:
+            if job_rq.is_started:
+                send_stop_job_command(redis_conn, job_id)
+            else:
+                job_rq.cancel()
             action_taken_in_rq = True
+            logger.info(f"  Sent stop/cancel command for job {job_id} in RQ.")
         else:
-            logger.info("  Job %s is already in a terminal RQ state: %s. No RQ action needed.", job_id, current_rq_status)
+            logger.info(f"  Job {job_id} is already in a terminal RQ state: {current_rq_status}.")
 
     except NoSuchJobError:
-        logger.warning("Job %s (type: %s) not found in RQ. Will mark as REVOKED in DB.", job_id, current_task_type)
+        logger.warning(f"Job {job_id} (type: {current_task_type}) not found in RQ, but marked as REVOKED in DB.")
     except Exception as e_rq_interaction:
-        logger.error("Error interacting with RQ for job %s (type: %s): %s", job_id, current_task_type, e_rq_interaction)
+        logger.error(f"Error interacting with RQ for job {job_id}: {e_rq_interaction}")
 
     if action_taken_in_rq:
         cancelled_count += 1
 
-    # Always mark as REVOKED in DB for the current job if its task_type is known
-    save_task_status(job_id, current_task_type, TASK_STATUS_REVOKED, progress=100, details={"message": "Task cancellation processed by API."})
-
-    # Attempt to cancel children based on DB parent_task_id
-    db = get_db()
-    cur = db.cursor(cursor_factory=DictCursor)
-
-    # Define terminal statuses for the query
-    terminal_statuses_tuple = (TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED,
-                               JobStatus.FINISHED, JobStatus.FAILED, JobStatus.CANCELED) # JobStatus for completeness if used directly
-
-    # Fetch children that are not already in a terminal state
-    cur.execute("""
-        SELECT task_id, task_type FROM task_status
-        WHERE parent_task_id = %s
-        AND status NOT IN %s
-    """, (job_id, terminal_statuses_tuple))
-    children_tasks = cur.fetchall()
-    cur.close()
+    # Recursively cancel children found in the database
+    children_tasks = get_child_tasks_from_db(job_id)
     
-    for child_task_row in children_tasks:
-        child_job_id = child_task_row['task_id']
-        child_task_type = child_task_row['task_type'] # Child's own type
-        logger.info("Recursively cancelling child job: %s of type %s", child_job_id, child_task_type)
-        # The count from recursive calls will be added
-        cancelled_count += cancel_job_and_children_recursive(child_job_id, child_task_type)
-
+    for child_task in children_tasks:
+        child_job_id = child_task['task_id']
+        # We only need to proceed if the child is not already in a terminal state
+        child_db_info = get_task_info_from_db(child_job_id)
+        if child_db_info and child_db_info.get('status') not in [TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED]:
+             logger.info(f"Recursively cancelling child job: {child_job_id}")
+             cancelled_count += cancel_job_and_children_recursive(child_job_id, reason="Cancelled due to parent task revocation.")
+        
     return cancelled_count
 
 @app.route('/api/cancel/<task_id>', methods=['POST'])
@@ -809,7 +785,10 @@ def cancel_task_endpoint(task_id):
     if not db_task_info:
         return jsonify({"message": f"Task {task_id} not found in database.", "task_id": task_id}), 404
 
-    cancelled_count = cancel_job_and_children_recursive(task_id, db_task_info.get('task_type')) # Task type from DB
+    if db_task_info.get('status') in [TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED]:
+        return jsonify({"message": f"Task {task_id} is already in a terminal state ({db_task_info.get('status')}) and cannot be cancelled.", "task_id": task_id}), 400
+
+    cancelled_count = cancel_job_and_children_recursive(task_id, reason=f"Cancellation requested for task {task_id} via API.")
 
     if cancelled_count > 0:
         return jsonify({"message": f"Task {task_id} and its children cancellation initiated. {cancelled_count} total jobs affected.", "task_id": task_id, "cancelled_jobs_count": cancelled_count}), 200
@@ -850,16 +829,15 @@ def cancel_all_tasks_by_type_endpoint(task_type_prefix):
     db = get_db()
     cur = db.cursor(cursor_factory=DictCursor)
     # Exclude terminal statuses
-    terminal_statuses = (TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED,
-                         JobStatus.FINISHED, JobStatus.FAILED, JobStatus.CANCELED) # JobStatus for completeness if used directly
+    terminal_statuses = (TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED)
     cur.execute("SELECT task_id, task_type FROM task_status WHERE task_type = %s AND status NOT IN %s", (task_type_prefix, terminal_statuses))
     tasks_to_cancel = cur.fetchall()
     cur.close()
 
     total_cancelled_jobs = 0
     cancelled_main_task_ids = []
-    for task_row in tasks_to_cancel:  # task_row has 'task_id' and 'task_type'
-        cancelled_jobs_for_this_main_task = cancel_job_and_children_recursive(task_row['task_id'], task_row['task_type'])  # Use task type from DB for consistency
+    for task_row in tasks_to_cancel:
+        cancelled_jobs_for_this_main_task = cancel_job_and_children_recursive(task_row['task_id'], reason=f"Bulk cancellation for task type '{task_type_prefix}' via API.")
         if cancelled_jobs_for_this_main_task > 0:
            total_cancelled_jobs += cancelled_jobs_for_this_main_task
            cancelled_main_task_ids.append(task_row['task_id'])
@@ -916,15 +894,14 @@ def get_active_tasks_endpoint():
     """
     db = get_db()
     cur = db.cursor(cursor_factory=DictCursor)
-    non_terminal_statuses = (TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED,
-                             JobStatus.FINISHED, JobStatus.FAILED, JobStatus.CANCELED)
+    non_terminal_statuses = (TASK_STATUS_PENDING, TASK_STATUS_STARTED, TASK_STATUS_PROGRESS)
     cur.execute("""
         SELECT task_id, parent_task_id, task_type, sub_type_identifier, status, progress, details, start_time, end_time
         FROM task_status
-        WHERE parent_task_id IS NULL AND status NOT IN ('SUCCESS', 'FAILURE', 'REVOKED', 'FINISHED', 'FAILED', 'CANCELED')
+        WHERE parent_task_id IS NULL AND status IN %s
         ORDER BY timestamp DESC
         LIMIT 1
-    """)
+    """, (non_terminal_statuses,))
     active_main_task_row = cur.fetchone()
     cur.close()
 

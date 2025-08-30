@@ -11,11 +11,12 @@ logger = logging.getLogger(__name__)
 class PocketBaseClient:
     """A client for interacting with the PocketBase API."""
 
-    def __init__(self, base_url, email=None, password=None, token=None):
+    def __init__(self, base_url, email=None, password=None, token=None, log_prefix="[PocketBaseClient]"):
         self.base_url = base_url.rstrip('/')
         self.email = email
         self.password = password
         self.token = token
+        self.log_prefix = log_prefix
         self.session = requests.Session()
         
         retry_strategy = Retry(
@@ -31,7 +32,7 @@ class PocketBaseClient:
         self.timeout = (15, 90)
 
         if self.token:
-            logger.info("PocketBaseClient initialized with an existing token.")
+            logger.info(f"{self.log_prefix} Initialized with an existing token.")
             self.session.headers.update({"Authorization": self.token})
 
     def authenticate(self):
@@ -43,19 +44,19 @@ class PocketBaseClient:
         payload = {"identity": self.email, "password": self.password}
         
         try:
-            logger.info("Attempting authentication with PocketBase...")
+            logger.info(f"{self.log_prefix} Attempting authentication...")
             response = self.session.post(auth_url, json=payload, timeout=self.timeout)
             response.raise_for_status()
             self.token = response.json().get('token')
             if not self.token:
                 raise ConnectionError("Authentication successful but no token received.")
             self.session.headers.update({"Authorization": self.token})
-            logger.info("Successfully authenticated with PocketBase.")
+            logger.info(f"{self.log_prefix} Successfully authenticated.")
             return True
         except requests.exceptions.RequestException as e:
             error_body = e.response.text if hasattr(e, 'response') and e.response else "No response body"
-            error_message = f"Failed to authenticate with PocketBase: {e} | Body: {error_body}"
-            logger.error(error_message)
+            error_message = f"Failed to authenticate: {e} | Body: {error_body}"
+            logger.error(f"{self.log_prefix} {error_message}")
             raise ConnectionError(error_message) from e
 
     def _make_request(self, method, endpoint, **kwargs):
@@ -72,16 +73,16 @@ class PocketBaseClient:
         try:
             response = self.session.request(method, url, **kwargs)
             if response.status_code == 401:
-                logger.warning("Token may have expired. Re-authenticating...")
+                logger.warning(f"{self.log_prefix} Token may have expired. Re-authenticating...")
                 self.authenticate()
                 response = self.session.request(method, url, **kwargs)
 
             response.raise_for_status()
             return response.json() if response.content else {}
         except requests.exceptions.RequestException as e:
-            logger.error(f"PocketBase API request failed for {method} {endpoint}: {e}")
+            logger.error(f"{self.log_prefix} API request failed for {method} {endpoint}: {e}")
             if hasattr(e, 'response') and e.response is not None:
-                logger.error(f"Response status: {e.response.status_code}, body: {e.response.text}")
+                logger.error(f"{self.log_prefix} Response status: {e.response.status_code}, body: {e.response.text}")
             raise
 
     def _sanitize_for_filter(self, value):
@@ -121,7 +122,7 @@ class PocketBaseClient:
                 response_data = self._make_request('GET', endpoint, params=params)
                 all_records.extend(response_data.get('items', []))
             except requests.exceptions.RequestException as e:
-                logger.error(f"FATAL: Could not retrieve records from '{collection}' for artists. Reason: {e}")
+                logger.error(f"{self.log_prefix} FATAL: Could not retrieve records from '{collection}' for artists. Reason: {e}")
                 raise e # Re-raise to fail the task
         
         return all_records
@@ -153,4 +154,3 @@ class PocketBaseClient:
         except requests.exceptions.RequestException:
              # The detailed error is already logged in _make_request, just re-raise
             raise
-
