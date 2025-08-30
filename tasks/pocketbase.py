@@ -82,7 +82,11 @@ class PocketBaseClient:
         except requests.exceptions.RequestException as e:
             logger.error(f"{self.log_prefix} API request failed for {method} {endpoint}: {e}")
             if hasattr(e, 'response') and e.response is not None:
-                logger.error(f"{self.log_prefix} Response status: {e.response.status_code}, body: {e.response.text}")
+                response_text = e.response.text
+                if "validation_not_unique" in response_text:
+                    logger.warning(f"{self.log_prefix} Request failed, likely due to an already existing song.")
+                else:
+                    logger.error(f"{self.log_prefix} Response status: {e.response.status_code}, body: {response_text}")
             raise
 
     def _sanitize_for_filter(self, value):

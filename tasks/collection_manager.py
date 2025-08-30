@@ -8,6 +8,7 @@ from rq import get_current_job, Retry
 from rq.job import Job
 from rq.exceptions import NoSuchJobError
 import requests # Import requests to catch specific exceptions
+import json
 
 # Import project modules
 from .pocketbase import PocketBaseClient
@@ -95,7 +96,6 @@ def sync_album_batch_task(parent_task_id, album_batch, pocketbase_url, pocketbas
 
             embeddings_to_upload = []
             scores_to_upload = []
-            song_locks_acquired = [] 
 
             for remote_key, track in unique_songs.items():
                 track_id = track['Id']
@@ -103,27 +103,25 @@ def sync_album_batch_task(parent_task_id, album_batch, pocketbase_url, pocketbas
                 title = track.get('Name')
                 
                 local_track_data = local_tracks_map.get(track_id)
-                is_local = local_track_data and local_track_data.get('embedding_vector') is not None and local_track_data['embedding_vector'].size > 0
-                is_remote = remote_key in remote_embedding_map
+                # 'has_local_analysis' means the analysis data (embedding, etc.) exists in the local database.
+                has_local_analysis = local_track_data and local_track_data.get('embedding_vector') is not None and local_track_data['embedding_vector'].size > 0
+                # 'has_remote_analysis' means the analysis data exists in the remote PocketBase collection.
+                has_remote_analysis = remote_key in remote_embedding_map
 
-                if is_local and not is_remote:
-                    song_lock_key = f"lock:song_upload:{artist.strip().lower()}:{title.strip().lower()}"
-                    if redis_conn.set(song_lock_key, task_id, nx=True, ex=300):
-                        song_locks_acquired.append(song_lock_key)
-                        embeddings_to_upload.append({
-                            "artist": artist, "title": title,
-                            "embedding": local_track_data['embedding_vector'].tolist()
-                        })
-                        scores_to_upload.append({
-                            "title": title, "artist": artist,
-                            "tempo": local_track_data.get('tempo'), "key": local_track_data.get('key'),
-                            "scale": local_track_data.get('scale'), "mood_vector": local_track_data.get('mood_vector'),
-                            "energy": local_track_data.get('energy'), "other_features": local_track_data.get('other_features')
-                        })
-                    else:
-                        logger.warning(f"{log_prefix} Song '{title}' by '{artist}' is locked by another worker. Skipping upload.")
-
-                elif not is_local and is_remote:
+                # Case: Present locally, not present remote => UPLOAD
+                if has_local_analysis and not has_remote_analysis:
+                    embeddings_to_upload.append({
+                        "artist": artist, "title": title,
+                        "embedding": local_track_data['embedding_vector'].tolist()
+                    })
+                    scores_to_upload.append({
+                        "title": title, "artist": artist,
+                        "tempo": local_track_data.get('tempo'), "key": local_track_data.get('key'),
+                        "scale": local_track_data.get('scale'), "mood_vector": local_track_data.get('mood_vector'),
+                        "energy": local_track_data.get('energy'), "other_features": local_track_data.get('other_features')
+                    })
+                # Case: Not present locally, present remote => DOWNLOAD
+                elif not has_local_analysis and has_remote_analysis:
                     remote_embedding_record = remote_embedding_map.get(remote_key)
                     remote_score_record = remote_score_map.get(remote_key)
 
@@ -148,6 +146,11 @@ def sync_album_batch_task(parent_task_id, album_batch, pocketbase_url, pocketbas
                             )
                         except (json.JSONDecodeError, TypeError) as e:
                             logger.warning(f"{log_prefix} Could not parse or process remote record for '{title}'. Skipping sync-down. Error: {e}")
+                # Case: Present locally, present remote => DO NOTHING
+                # Case: Not present locally, not present remote => DO NOTHING
+                # These cases are handled by taking no action.
+                else:
+                    pass
             
             try:
                 if embeddings_to_upload:
@@ -173,18 +176,6 @@ def sync_album_batch_task(parent_task_id, album_batch, pocketbase_url, pocketbas
             save_task_status(task_id, "album_batch_sync", TASK_STATUS_FAILURE, parent_task_id=parent_task_id, sub_type_identifier=lock_id, details={"error": str(e), "traceback": traceback.format_exc()})
             raise
         finally:
-            if song_locks_acquired:
-                released_count = 0
-                for lock_key in song_locks_acquired:
-                    try:
-                        # Atomically check and release each song lock
-                        released = redis_conn.eval(LUA_SAFE_RELEASE_LOCK_SCRIPT, 1, lock_key, task_id)
-                        if released:
-                            released_count += 1
-                    except Exception as e:
-                        logger.error(f"{log_prefix} Failed to execute Lua script to release song lock {lock_key}: {e}")
-                logger.info(f"{log_prefix} Safely released {released_count}/{len(song_locks_acquired)} song locks.")
-
             if is_batch_lock_acquired:
                 try:
                     # Atomically check and release the main batch lock
@@ -209,12 +200,33 @@ def sync_collections_task(url, email, password, num_albums):
     with app.app_context():
         def log_and_update(message, progress, status=TASK_STATUS_PROGRESS, **kwargs):
             logger.info(f"{log_prefix} {message}")
-            # Ensure details are always a dictionary
-            db_details = kwargs.get('details', {})
-            # Append new log message to existing log list in details
-            log_entry = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {message}"
+
+            current_task_info = get_task_info_from_db(current_task_id)
+            db_details_raw = current_task_info.get('details', {}) if current_task_info else {}
+
+            # --- FIX: Handle the case where 'details' is stored as a JSON string ---
+            db_details = {}
+            if isinstance(db_details_raw, str):
+                try:
+                    loaded_details = json.loads(db_details_raw)
+                    if isinstance(loaded_details, dict):
+                        db_details = loaded_details
+                except json.JSONDecodeError:
+                    logger.warning(f"{log_prefix} Could not parse 'details' field from DB. Starting with empty details. Raw data: {db_details_raw}")
+            elif isinstance(db_details_raw, dict):
+                db_details = db_details_raw
+            # If it's neither, we start with an empty dict to prevent crashes.
+
+            # Update with any details passed in kwargs (e.g., error info)
+            if 'details' in kwargs:
+                db_details.update(kwargs['details'])
+
+            # Ensure 'log' key exists and is a list
             if 'log' not in db_details or not isinstance(db_details['log'], list):
                 db_details['log'] = []
+
+            # Append the new log message.
+            log_entry = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {message}"
             db_details['log'].append(log_entry)
             
             save_task_status(current_task_id, "main_collection_sync", status, progress=progress, details=db_details)
@@ -275,43 +287,38 @@ def sync_collections_task(url, email, password, num_albums):
 
             while True:
                 # --- Cancellation Check ---
-                # Check if this main task has been revoked by an API call.
                 main_task_info = get_task_info_from_db(current_task_id)
                 if main_task_info and main_task_info.get('status') == TASK_STATUS_REVOKED:
                     log_and_update("Main task revoked. Stopping monitoring.", 99)
-                    # The recursive cancel from the API will handle sub-jobs,
-                    # so we can just exit here.
                     return
 
-                # Fetch jobs from RQ to get their latest status
-                finished_job_ids = set()
-                try:
-                    fetched_jobs = Job.fetch_many([j.id for j in launched_jobs], connection=redis_conn)
-                    for job in fetched_jobs:
-                        if job and (job.is_finished or job.is_failed or job.is_canceled):
-                            finished_job_ids.add(job.id)
-                except (NoSuchJobError, ConnectionError) as e:
-                    logger.warning(f"{log_prefix} Could not fetch all job statuses from Redis: {e}. Will retry.")
-
+                # --- FIX: Monitor sub-task status directly from the application database ---
+                all_child_tasks = get_child_tasks_from_db(current_task_id)
+                finished_child_tasks = [
+                    t for t in all_child_tasks 
+                    if t.get('status') in [TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED]
+                ]
+                
+                finished_count = len(finished_child_tasks)
 
                 if total_launched > 0:
-                    progress = 15 + int(80 * (len(finished_job_ids) / total_launched))
+                    # Progress from 15% to 95% is based on sub-task completion
+                    progress = 15 + int(80 * (finished_count / total_launched))
                 else:
                     progress = 100
 
-                status_message = f"Monitoring... {len(finished_job_ids)}/{total_launched} batches completed."
+                status_message = f"Monitoring... {finished_count}/{total_launched} batches completed."
                 log_and_update(status_message, progress)
 
-                if len(finished_job_ids) == total_launched:
+                if finished_count >= total_launched:
+                    log_and_update("All batches have completed. Performing final check...", 95)
                     break
                 
-                time.sleep(10)
+                time.sleep(5) # Shortened sleep time for more responsive updates
 
-            # Final, more robust check of sub-task outcomes.
-            # A simple check for FAILURE is not enough, as skipped jobs are marked SUCCESS.
+            # Final, more robust check of sub-task outcomes to ensure each batch was truly processed.
             all_child_tasks = get_child_tasks_from_db(current_task_id)
             
-            # Group tasks by their batch identifier (lock_id, which is sub_type_identifier)
             tasks_by_batch = {}
             for task in all_child_tasks:
                 batch_id = task.get('sub_type_identifier')
@@ -320,8 +327,8 @@ def sync_collections_task(url, email, password, num_albums):
 
             unprocessed_batches = []
             for batch_id, tasks in tasks_by_batch.items():
-                # A batch is considered successfully processed if at least one task for it
-                # completed with SUCCESS status AND was not skipped.
+                # A batch is considered successfully processed if at least one of its sub-tasks
+                # completed with SUCCESS status AND was not a 'skipped' task.
                 is_processed = any(
                     t.get('status') == TASK_STATUS_SUCCESS and "Skipped" not in t.get('details', {}).get('message', '')
                     for t in tasks
@@ -338,8 +345,7 @@ def sync_collections_task(url, email, password, num_albums):
 
         except Exception as e:
             logger.error(f"{log_prefix} An unexpected error occurred in main sync task: {e}", exc_info=True)
-            # The final log_and_update is now handled inside the robust check for unprocessed_batches
-            # but we keep this for other unexpected exceptions.
             if not get_task_info_from_db(current_task_id) or get_task_info_from_db(current_task_id).get('status') != TASK_STATUS_FAILURE:
                  log_and_update(f"Error: {e}", 100, status=TASK_STATUS_FAILURE, details={"error": str(e), "traceback": traceback.format_exc()})
             raise
+
