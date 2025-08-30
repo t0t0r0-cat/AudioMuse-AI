@@ -6,7 +6,6 @@ import psycopg2 # Import psycopg2 to catch specific errors
 
 # Imports from the project
 from .voyager_manager import get_vector_by_id, find_nearest_neighbors_by_vector, find_nearest_neighbors_by_id
-from app import get_db, get_score_data_by_ids, get_tracks_by_ids
 from config import (
     PATH_AVG_JUMP_SAMPLE_SIZE, PATH_CANDIDATES_PER_STEP, PATH_DEFAULT_LENGTH,
     PATH_DISTANCE_METRIC, VOYAGER_METRIC, PATH_LCORE_MULTIPLIER,
@@ -215,6 +214,7 @@ def find_path_between_songs(start_item_id, end_item_id, Lreq=PATH_DEFAULT_LENGTH
     """
     Finds an adaptive path between two songs, ensuring exact length and no duplicate artist/title pairs.
     """
+    from app import get_db, get_score_data_by_ids, get_tracks_by_ids
     logger.info(f"Starting adaptive path generation from {start_item_id} to {end_item_id} with requested length {Lreq}.")
 
     start_vector = get_vector_by_id(start_item_id)

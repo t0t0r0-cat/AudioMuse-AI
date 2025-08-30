@@ -18,17 +18,6 @@ from config import JELLYFIN_URL, JELLYFIN_USER_ID, JELLYFIN_TOKEN, HEADERS, TEMP
 
 # RQ import
 from rq import Retry
-# Import app-level components here to avoid circular imports at module level
-from app import (
-    rq_queue_high,
-    clean_successful_task_details_on_new_start,
-    save_task_status,
-    get_db,
-    TASK_STATUS_PENDING,
-    TASK_STATUS_SUCCESS,
-    TASK_STATUS_FAILURE,
-    TASK_STATUS_REVOKED
-)
 from psycopg2.extras import DictCursor
 
 
@@ -225,6 +214,18 @@ def start_clustering_endpoint():
                         status:
                             type: string
     """
+    # Local imports to prevent circular dependency at startup
+    from app import (
+        rq_queue_high,
+        clean_successful_task_details_on_new_start,
+        save_task_status,
+        get_db,
+        TASK_STATUS_PENDING,
+        TASK_STATUS_SUCCESS,
+        TASK_STATUS_FAILURE,
+        TASK_STATUS_REVOKED
+    )
+
     # Check for an existing active task to prevent parallel runs
     db = get_db()
     cur = db.cursor(cursor_factory=DictCursor)

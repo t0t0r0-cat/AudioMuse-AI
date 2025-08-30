@@ -569,6 +569,7 @@ def index():
     """
     return render_template('index.html')
 
+
 @app.route('/api/status/<task_id>', methods=['GET'])
 def get_task_status_endpoint(task_id):
     """
@@ -1043,39 +1044,29 @@ def listen_for_index_reloads():
 
 
 # --- Import and Register Blueprints ---
-# NOTE: This is moved to the `if __name__ == '__main__'` block to prevent
-# circular imports when an RQ worker imports this module.
-# For production deployment with a WSGI server like Gunicorn,
-# this registration should be handled by an application factory pattern.
-# from app_chat import chat_bp
-# app.register_blueprint(chat_bp, url_prefix='/chat')
+# This is the original, working structure.
+from app_chat import chat_bp
+from app_clustering import clustering_bp
+from app_analysis import analysis_bp
+from app_voyager import voyager_bp
+from app_sonic_fingerprint import sonic_fingerprint_bp
+from app_path import path_bp
+from app_collection import collection_bp
+
+app.register_blueprint(chat_bp, url_prefix='/chat')
+app.register_blueprint(clustering_bp)
+app.register_blueprint(analysis_bp)
+app.register_blueprint(voyager_bp)
+app.register_blueprint(sonic_fingerprint_bp)
+app.register_blueprint(path_bp)
+app.register_blueprint(collection_bp)
 
 if __name__ == '__main__':
-    # --- Register Blueprints ---
-    # We register blueprints here to avoid circular imports for RQ workers.
-    from app_chat import chat_bp
-    from app_clustering import clustering_bp
-    from app_analysis import analysis_bp
-    from app_voyager import voyager_bp
-    from app_sonic_fingerprint import sonic_fingerprint_bp
-    from app_path import path_bp # Import the new path blueprint
-
-    # Register all blueprints
-    app.register_blueprint(chat_bp, url_prefix='/chat')
-    app.register_blueprint(clustering_bp)
-    app.register_blueprint(analysis_bp)
-    app.register_blueprint(voyager_bp)
-    app.register_blueprint(sonic_fingerprint_bp)
-    app.register_blueprint(path_bp) # Register the new path blueprint
-    
     os.makedirs(TEMP_DIR, exist_ok=True)
-    # This block runs only when the script is executed directly (e.g., `python app.py`)
-    # It's the entry point for the web server process.
+    
     with app.app_context():
         # --- Initial Voyager Index Load ---
-        # Import locally to avoid circular dependency issues.
         from tasks.voyager_manager import load_voyager_index_for_querying
-        # Load the Voyager index into memory on startup.
         load_voyager_index_for_querying()
 
     # --- Start Background Listener Thread ---
@@ -1083,3 +1074,4 @@ if __name__ == '__main__':
     listener_thread.start()
 
     app.run(debug=False, host='0.0.0.0', port=8000)
+

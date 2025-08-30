@@ -9,9 +9,6 @@ from config import NUM_RECENT_ALBUMS, TOP_N_MOODS
 # RQ import
 from rq import Retry
 
-# Imports from app.py
-from app import clean_successful_task_details_on_new_start, save_task_status, TASK_STATUS_PENDING, rq_queue_high
-
 logger = logging.getLogger(__name__)
 
 # Create a Blueprint for analysis-related routes
@@ -65,6 +62,9 @@ def start_analysis_endpoint():
       500:
         description: Server error during task enqueue.
     """
+    # Local import to prevent circular dependency at startup
+    from app import clean_successful_task_details_on_new_start, save_task_status, TASK_STATUS_PENDING, rq_queue_high
+
     data = request.json or {}
     # MODIFIED: Removed jellyfin_url, jellyfin_user_id, and jellyfin_token as they are no longer passed to the task.
     # The task now gets these details from the central config.
