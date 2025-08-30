@@ -103,7 +103,7 @@ class PocketBaseClient:
         endpoint = f"/api/collections/{collection}/records"
         
         # Chunk artists to keep URL length reasonable
-        ARTIST_CHUNK_SIZE = 15
+        ARTIST_CHUNK_SIZE = 5
         all_records = []
         
         artist_chunks = [artists[i:i + ARTIST_CHUNK_SIZE] for i in range(0, len(artists), ARTIST_CHUNK_SIZE)]
@@ -167,3 +167,4 @@ class PocketBaseClient:
              # The detailed error is already logged in _make_request, just re-raise
             logger.error(f"{self.log_prefix} The entire batch request to collection '{collection}' failed.")
             raise
+
