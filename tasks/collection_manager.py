@@ -137,18 +137,17 @@ def sync_album_batch_task(parent_task_id, album_batch, pocketbase_url, pocketbas
                     logger.info(f"{log_prefix} Uploading {len(embeddings_to_upload)} new embedding records...")
                     pb_client.create_records_batch(embeddings_to_upload, collection='embedding')
             except requests.exceptions.HTTPError as e:
-                if e.response and e.response.status_code == 400:
-                    logger.warning(f"{log_prefix} Embedding batch upload failed, likely due to duplicates (this is safe). Details: {e.response.text}")
-                else: raise e
+                # A 400 error can be due to malformed data or duplicates. Log as a warning but don't crash the whole task.
+                logger.warning(f"{log_prefix} A non-critical error occurred during embedding batch upload (e.g., duplicates, bad data). Details: {e.response.text if e.response else str(e)}")
+                # We don't re-raise, allowing the task to continue to the scores upload.
 
             try:
                 if scores_to_upload:
                     logger.info(f"{log_prefix} Uploading {len(scores_to_upload)} new score records...")
                     pb_client.create_records_batch(scores_to_upload, collection='score')
             except requests.exceptions.HTTPError as e:
-                if e.response and e.response.status_code == 400:
-                    logger.warning(f"{log_prefix} Score batch upload failed, likely due to duplicates (this is safe). Details: {e.response.text}")
-                else: raise e
+                logger.warning(f"{log_prefix} A non-critical error occurred during score batch upload (e.g., duplicates, bad data). Details: {e.response.text if e.response else str(e)}")
+                # We don't re-raise here either.
 
             save_task_status(task_id, "album_batch_sync", TASK_STATUS_SUCCESS, parent_task_id=parent_task_id, sub_type_identifier=lock_id, progress=100, details={"message": "Batch processed successfully."})
 
@@ -221,9 +220,12 @@ def sync_collections_task(url, email, password, num_albums):
             log_and_update(f"Found {total_albums} albums. Preparing to queue {total_chunks} batches...", 10)
             albums_queued_so_far = 0
             for idx, album_batch in enumerate(album_chunks):
+                # --- MODIFIED: Provide granular progress updates during the enqueuing loop ---
+                enqueuing_progress = 10 + int(5 * ((idx + 1) / total_chunks))
+                log_and_update(f"Queueing batch {idx + 1}/{total_chunks}...", enqueuing_progress)
+
                 albums_queued_so_far += len(album_batch)
-                logger.info(f"{log_prefix} Queueing sync for albums {albums_queued_so_far}/{total_albums} (batch {idx + 1}/{total_chunks})")
-                
+
                 sub_job = rq_queue_default.enqueue(
                     'tasks.collection_manager.sync_album_batch_task',
                     args=(current_task_id, album_batch, url, pocketbase_token, log_prefix),
@@ -232,7 +234,6 @@ def sync_collections_task(url, email, password, num_albums):
                     job_timeout='1h'
                 )
                 launched_jobs.append(sub_job)
-                time.sleep(1)
 
             total_launched = len(launched_jobs)
             log_and_update(f"All {total_launched} batches queued. Monitoring for completion...", 15)

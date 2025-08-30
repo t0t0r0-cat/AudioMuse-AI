@@ -135,14 +135,21 @@ class PocketBaseClient:
             return True
 
         batch_endpoint = "/api/batch"
-        requests_payload = [
-            {
+        requests_payload = []
+        for record in records:
+            # Create a copy to modify
+            processed_body = record.copy()
+            
+            # The 'embedding' field in the 'embedding' collection must be a JSON string.
+            # The 'embedding' field does not exist in the 'score' collection, so this is safe.
+            if 'embedding' in processed_body and isinstance(processed_body['embedding'], list):
+                processed_body['embedding'] = json.dumps(processed_body['embedding'])
+
+            requests_payload.append({
                 "method": "POST",
                 "url": f"/api/collections/{collection}/records",
-                "body": record
-            }
-            for record in records
-        ]
+                "body": processed_body
+            })
 
         payload = {"requests": requests_payload}
         
@@ -151,6 +158,8 @@ class PocketBaseClient:
         # We re-raise the exception to allow the task to decide how to handle it.
         try:
             self._make_request('POST', batch_endpoint, json=payload)
+            logger.info(f"{self.log_prefix} Successfully submitted batch request for {len(records)} records to collection '{collection}'.")
         except requests.exceptions.RequestException:
              # The detailed error is already logged in _make_request, just re-raise
+            logger.error(f"{self.log_prefix} The entire batch request to collection '{collection}' failed.")
             raise
