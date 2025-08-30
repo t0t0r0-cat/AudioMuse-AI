@@ -3,7 +3,7 @@ import logging
 import json
 import numpy as np
 from requests.adapters import HTTPAdapter
-from requests.packages.urllib3.util.retry import Retry
+from urllib3.util.retry import Retry
 
 logger = logging.getLogger(__name__)
 
@@ -17,28 +17,26 @@ class PocketBaseClient:
         self.token = token
         self.session = requests.Session()
         
-        # --- MODIFIED: Increased backoff factor for more delay between retries ---
         retry_strategy = Retry(
-            total=3,
+            total=5,
             status_forcelist=[429, 500, 502, 503, 504],
-            backoff_factor=2  # eg. 2s, 4s, 8s
+            backoff_factor=2,
+            respect_retry_after_header=True
         )
         adapter = HTTPAdapter(max_retries=retry_strategy)
         self.session.mount("https://", adapter)
         self.session.mount("http://", adapter)
 
         self.session.headers.update({"Content-Type": "application/json"})
-        self.timeout = (15, 90)  # (connect, read) timeout in seconds
+        self.timeout = (15, 90)
 
         if self.token:
             self.session.headers.update({"Authorization": self.token})
             logger.info("PocketBaseClient initialized with an existing token.")
 
     def authenticate(self):
-        """Authenticates with the PocketBase server and stores the token."""
         if not self.email or not self.password:
-            logger.error("Authentication attempted without providing email and password.")
-            return False
+            raise ValueError("Authentication attempted without providing email and password.")
         
         logger.info("Attempting to authenticate with PocketBase to get a new token...")
         auth_url = f"{self.base_url}/api/collections/users/auth-with-password"
@@ -48,8 +46,7 @@ class PocketBaseClient:
             response.raise_for_status()
             self.token = response.json().get('token')
             if not self.token:
-                logger.error("Authentication successful but no token received.")
-                return False
+                raise ConnectionError("Authentication successful but no token received.")
             self.session.headers.update({"Authorization": self.token})
             logger.info("Successfully authenticated and received new token.")
             return True
@@ -61,15 +58,11 @@ class PocketBaseClient:
             raise ConnectionError(error_message) from e
 
     def _make_request(self, method, endpoint, **kwargs):
-        """Makes a request, handling re-authentication if necessary."""
         if not self.token:
             logger.warning("No token found. Attempting to authenticate first.")
             if not (self.email and self.password and self.authenticate()):
                 raise ConnectionError("PocketBase authentication required but failed.")
-        else:
-            logger.debug("Making request with existing token.")
-
-
+        
         request_kwargs = kwargs.copy()
         request_kwargs.setdefault('timeout', self.timeout)
 
@@ -91,56 +84,51 @@ class PocketBaseClient:
                 logger.error(f"Response status: {e.response.status_code}, body: {e.response.text}")
             raise
 
-    def get_records_by_artist_and_titles(self, artist, titles):
-        """Fetches records from the 'embedding' collection for a given artist and a list of titles."""
-        if not titles:
-            return []
+    def get_records_by_songs(self, songs, collection='embedding'):
+        if not songs: return []
             
         def escape_pb_filter_value(value):
-            return value.replace('\\', '\\\\').replace('"', '""').replace("'", "''")
+            if value is None: return ""
+            return str(value).replace('\\', '\\\\').replace('"', '""').replace("'", "''")
 
-        escaped_artist = escape_pb_filter_value(artist)
+        filter_parts = []
+        for song in songs:
+            artist = song.get('artist')
+            title = song.get('title')
+            if artist and title:
+                escaped_artist = escape_pb_filter_value(artist)
+                escaped_title = escape_pb_filter_value(title)
+                filter_parts.append(f'(artist="{escaped_artist}" && title="{escaped_title}")')
+
+        if not filter_parts: return []
+        filter_query = " || ".join(filter_parts)
+
+        endpoint = f"/api/collections/{collection}/records"
+        params = {'filter': filter_query, 'perPage': len(songs) + 5}
         
-        title_filter_parts = []
-        for title in titles:
-            escaped_title = escape_pb_filter_value(title)
-            title_filter_parts.append(f'title="{escaped_title}"')
-
-        title_filters = " || ".join(title_filter_parts)
-        filter_query = f'artist="{escaped_artist}" && ({title_filters})'
-        logger.debug(f"Constructed PocketBase filter: {filter_query}")
-
-        endpoint = "/api/collections/embedding/records"
-        params = {
-            'filter': filter_query,
-            'perPage': len(titles) + 5,
-            'fields': 'artist,title,embedding'
-        }
-
         try:
             response_data = self._make_request('GET', endpoint, params=params)
             return response_data.get('items', [])
         except Exception as e:
-            # --- MODIFIED: Re-raise the exception to force RQ retry ---
-            logger.error(f"FATAL: Could not retrieve records for artist '{artist}' due to network error. Failing task to force retry. Reason: {e}")
+            logger.error(f"FATAL: Could not retrieve records from '{collection}'. Failing task. Reason: {e}")
             raise e
 
-    def create_records_batch(self, records):
-        """Creates multiple records in the 'embedding' collection using a single batch API call."""
-        if not records:
-            return True
+    def get_single_record_by_artist_title(self, artist, title, collection='score'):
+        records = self.get_records_by_songs([{'artist': artist, 'title': title}], collection=collection)
+        return records[0] if records else None
+
+    def create_records_batch(self, records, collection='embedding'):
+        if not records: return True
 
         batch_endpoint = "/api/batch"
-        
         requests_payload = [
-            {"method": "POST", "url": "/api/collections/embedding/records", "body": record}
+            {"method": "POST", "url": f"/api/collections/{collection}/records", "body": record}
             for record in records
         ]
         payload = {"requests": requests_payload}
 
         try:
             response_data = self._make_request('POST', batch_endpoint, json=payload)
-            
             if not isinstance(response_data, list):
                 logger.error(f"Batch create failed. Expected a list in response, got {type(response_data)}")
                 return False
@@ -153,17 +141,16 @@ class PocketBaseClient:
                     original_record = records[i]
                     error_details = res.get('data', {})
                     logger.error("---- POCKETBASE BATCH SUB-REQUEST FAILURE ---")
+                    logger.error(f"    Collection: {collection}")
                     logger.error(f"    Record: '{original_record.get('title')}' by '{original_record.get('artist')}'")
                     logger.error(f"    Status: {status_code}")
                     logger.error(f"    Error Details: {json.dumps(error_details)}")
                     logger.error("---------------------------------------------")
 
             if not all_successful:
-                logger.warning(f"Finished batch creation with one or more failures out of {len(records)} records.")
-
+                logger.warning(f"Finished batch creation for '{collection}' with one or more failures.")
             return all_successful
-
         except Exception as e:
-            logger.error(f"An exception occurred during the batch create API call: {e}")
+            logger.error(f"An exception occurred during the batch create API call for '{collection}': {e}")
             return False
 
