@@ -4,11 +4,11 @@ import logging
 import traceback
 import numpy as np
 import hashlib
+import json
 from rq import get_current_job, Retry
 from rq.job import Job
 from rq.exceptions import NoSuchJobError
 import requests # Import requests to catch specific exceptions
-import json
 
 # Import project modules
 from .pocketbase import PocketBaseClient
@@ -103,13 +103,12 @@ def sync_album_batch_task(parent_task_id, album_batch, pocketbase_url, pocketbas
                 title = track.get('Name')
                 
                 local_track_data = local_tracks_map.get(track_id)
-                # 'has_local_analysis' means the analysis data (embedding, etc.) exists in the local database.
-                has_local_analysis = local_track_data and local_track_data.get('embedding_vector') is not None and local_track_data['embedding_vector'].size > 0
-                # 'has_remote_analysis' means the analysis data exists in the remote PocketBase collection.
-                has_remote_analysis = remote_key in remote_embedding_map
+                # An item is considered "present locally" if its embedding vector has been calculated and stored.
+                is_present_locally = local_track_data and local_track_data.get('embedding_vector') is not None and local_track_data['embedding_vector'].size > 0
+                is_present_remotely = remote_key in remote_embedding_map
 
-                # Case: Present locally, not present remote => UPLOAD
-                if has_local_analysis and not has_remote_analysis:
+                # Case 1: Present locally, not present remotely => UPLOAD
+                if is_present_locally and not is_present_remotely:
                     embeddings_to_upload.append({
                         "artist": artist, "title": title,
                         "embedding": local_track_data['embedding_vector'].tolist()
@@ -120,14 +119,15 @@ def sync_album_batch_task(parent_task_id, album_batch, pocketbase_url, pocketbas
                         "scale": local_track_data.get('scale'), "mood_vector": local_track_data.get('mood_vector'),
                         "energy": local_track_data.get('energy'), "other_features": local_track_data.get('other_features')
                     })
-                # Case: Not present locally, present remote => DOWNLOAD
-                elif not has_local_analysis and has_remote_analysis:
+                    logger.info(f"{log_prefix} Queued for upload: '{title}' by '{artist}'.")
+
+                # Case 2: Not present locally, present remotely => DOWNLOAD
+                elif not is_present_locally and is_present_remotely:
                     remote_embedding_record = remote_embedding_map.get(remote_key)
                     remote_score_record = remote_score_map.get(remote_key)
 
                     if remote_embedding_record and remote_score_record:
                         try:
-                            # --- FIX: Correctly deserialize the embedding JSON string from PocketBase ---
                             embedding_json = remote_embedding_record.get('embedding', '[]')
                             embedding_list = json.loads(embedding_json) if embedding_json else []
                             embedding_vector = np.array(embedding_list).astype(np.float32)
@@ -144,30 +144,28 @@ def sync_album_batch_task(parent_task_id, album_batch, pocketbase_url, pocketbas
                                 energy=remote_score_record.get('energy'),
                                 other_features=remote_score_record.get('other_features')
                             )
+                            logger.info(f"{log_prefix} Synced down from remote: '{title}' by '{artist}'.")
                         except (json.JSONDecodeError, TypeError) as e:
-                            logger.warning(f"{log_prefix} Could not parse or process remote record for '{title}'. Skipping sync-down. Error: {e}")
-                # Case: Present locally, present remote => DO NOTHING
-                # Case: Not present locally, not present remote => DO NOTHING
-                # These cases are handled by taking no action.
+                            logger.warning(f"{log_prefix} Could not parse/process remote record for '{title}'. Skipping sync-down. Error: {e}")
+                
+                # Case 3 & 4: (Present locally, present remotely) OR (Not present locally, not present remotely) => DO NOTHING
                 else:
-                    pass
+                    logger.debug(f"{log_prefix} No action needed for '{title}' by '{artist}' (State: Local={is_present_locally}, Remote={is_present_remotely}).")
+
             
             try:
                 if embeddings_to_upload:
                     logger.info(f"{log_prefix} Uploading {len(embeddings_to_upload)} new embedding records...")
                     pb_client.create_records_batch(embeddings_to_upload, collection='embedding')
             except requests.exceptions.HTTPError as e:
-                # A 400 error can be due to malformed data or duplicates. Log as a warning but don't crash the whole task.
-                logger.warning(f"{log_prefix} A non-critical error occurred during embedding batch upload (e.g., duplicates, bad data). Details: {e.response.text if e.response else str(e)}")
-                # We don't re-raise, allowing the task to continue to the scores upload.
+                logger.warning(f"{log_prefix} A non-critical error occurred during embedding batch upload. Details: {e.response.text if e.response else str(e)}")
 
             try:
                 if scores_to_upload:
                     logger.info(f"{log_prefix} Uploading {len(scores_to_upload)} new score records...")
                     pb_client.create_records_batch(scores_to_upload, collection='score')
             except requests.exceptions.HTTPError as e:
-                logger.warning(f"{log_prefix} A non-critical error occurred during score batch upload (e.g., duplicates, bad data). Details: {e.response.text if e.response else str(e)}")
-                # We don't re-raise here either.
+                logger.warning(f"{log_prefix} A non-critical error occurred during score batch upload. Details: {e.response.text if e.response else str(e)}")
 
             save_task_status(task_id, "album_batch_sync", TASK_STATUS_SUCCESS, parent_task_id=parent_task_id, sub_type_identifier=lock_id, progress=100, details={"message": "Batch processed successfully."})
 
@@ -200,35 +198,27 @@ def sync_collections_task(url, email, password, num_albums):
     with app.app_context():
         def log_and_update(message, progress, status=TASK_STATUS_PROGRESS, **kwargs):
             logger.info(f"{log_prefix} {message}")
-
+            # Ensure details are always a dictionary
             current_task_info = get_task_info_from_db(current_task_id)
-            db_details_raw = current_task_info.get('details', {}) if current_task_info else {}
-
-            # --- FIX: Handle the case where 'details' is stored as a JSON string ---
             db_details = {}
-            if isinstance(db_details_raw, str):
+            if current_task_info and current_task_info.get('details'):
                 try:
-                    loaded_details = json.loads(db_details_raw)
-                    if isinstance(loaded_details, dict):
-                        db_details = loaded_details
-                except json.JSONDecodeError:
-                    logger.warning(f"{log_prefix} Could not parse 'details' field from DB. Starting with empty details. Raw data: {db_details_raw}")
-            elif isinstance(db_details_raw, dict):
-                db_details = db_details_raw
-            # If it's neither, we start with an empty dict to prevent crashes.
+                    # The details from DB are a JSON string, so we need to parse it.
+                    db_details = json.loads(current_task_info['details'])
+                except (json.JSONDecodeError, TypeError):
+                    # If parsing fails, it might be a raw string. Handle it gracefully.
+                    db_details = {"raw_details": current_task_info['details']}
 
-            # Update with any details passed in kwargs (e.g., error info)
+            # Append new log message to existing log list in details
+            log_entry = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {message}"
+            if 'log' not in db_details or not isinstance(db_details.get('log'), list):
+                db_details['log'] = []
+            db_details['log'].append(log_entry)
+            
+            # --- Smartly merge new details from kwargs ---
             if 'details' in kwargs:
                 db_details.update(kwargs['details'])
 
-            # Ensure 'log' key exists and is a list
-            if 'log' not in db_details or not isinstance(db_details['log'], list):
-                db_details['log'] = []
-
-            # Append the new log message.
-            log_entry = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {message}"
-            db_details['log'].append(log_entry)
-            
             save_task_status(current_task_id, "main_collection_sync", status, progress=progress, details=db_details)
 
         try:
@@ -236,19 +226,16 @@ def sync_collections_task(url, email, password, num_albums):
             
             pb_client = PocketBaseClient(base_url=url, email=email, password=password, log_prefix=log_prefix)
 
-            # --- Specific handling for authentication ---
             try:
                 pb_client.authenticate()
                 pocketbase_token = pb_client.token
             except ConnectionError as auth_error:
-                # Check if it's a 400 error, which implies bad credentials
                 if '400' in str(auth_error):
                     user_friendly_error = "Authentication failed. Please check the PocketBase URL, email, and password."
                     log_and_update(user_friendly_error, 100, status=TASK_STATUS_FAILURE, details={"error": user_friendly_error, "original_error": str(auth_error)})
-                else: # Other connection error (timeout, DNS, etc.)
+                else:
                     user_friendly_error = f"Could not connect to PocketBase server. Please verify the URL and network connectivity."
                     log_and_update(user_friendly_error, 100, status=TASK_STATUS_FAILURE, details={"error": user_friendly_error, "original_error": str(auth_error)})
-                # Re-raise the exception to ensure the RQ job is marked as failed.
                 raise
 
             log_and_update("Authentication successful. Fetching recent albums...", 5)
@@ -267,7 +254,6 @@ def sync_collections_task(url, email, password, num_albums):
             log_and_update(f"Found {total_albums} albums. Preparing to queue {total_chunks} batches...", 10)
             albums_queued_so_far = 0
             for idx, album_batch in enumerate(album_chunks):
-                # --- MODIFIED: Provide granular progress updates during the enqueuing loop ---
                 enqueuing_progress = 10 + int(5 * ((idx + 1) / total_chunks))
                 log_and_update(f"Queueing batch {idx + 1}/{total_chunks}...", enqueuing_progress)
 
@@ -285,38 +271,34 @@ def sync_collections_task(url, email, password, num_albums):
             total_launched = len(launched_jobs)
             log_and_update(f"All {total_launched} batches queued. Monitoring for completion...", 15)
 
-            while True:
-                # --- Cancellation Check ---
+            completed_sub_tasks_count = 0
+            while completed_sub_tasks_count < total_launched:
                 main_task_info = get_task_info_from_db(current_task_id)
                 if main_task_info and main_task_info.get('status') == TASK_STATUS_REVOKED:
                     log_and_update("Main task revoked. Stopping monitoring.", 99)
                     return
 
-                # --- FIX: Monitor sub-task status directly from the application database ---
                 all_child_tasks = get_child_tasks_from_db(current_task_id)
-                finished_child_tasks = [
+                finished_tasks = [
                     t for t in all_child_tasks 
                     if t.get('status') in [TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED]
                 ]
-                
-                finished_count = len(finished_child_tasks)
+                completed_sub_tasks_count = len(finished_tasks)
 
                 if total_launched > 0:
-                    # Progress from 15% to 95% is based on sub-task completion
-                    progress = 15 + int(80 * (finished_count / total_launched))
+                    progress = 15 + int(80 * (completed_sub_tasks_count / total_launched))
                 else:
                     progress = 100
 
-                status_message = f"Monitoring... {finished_count}/{total_launched} batches completed."
+                status_message = f"Monitoring... {completed_sub_tasks_count}/{total_launched} batches completed."
                 log_and_update(status_message, progress)
-
-                if finished_count >= total_launched:
-                    log_and_update("All batches have completed. Performing final check...", 95)
+                
+                if completed_sub_tasks_count >= total_launched:
                     break
                 
-                time.sleep(5) # Shortened sleep time for more responsive updates
+                time.sleep(5)
 
-            # Final, more robust check of sub-task outcomes to ensure each batch was truly processed.
+            log_and_update("All batches have completed. Performing final check...", 96)
             all_child_tasks = get_child_tasks_from_db(current_task_id)
             
             tasks_by_batch = {}
@@ -327,12 +309,22 @@ def sync_collections_task(url, email, password, num_albums):
 
             unprocessed_batches = []
             for batch_id, tasks in tasks_by_batch.items():
-                # A batch is considered successfully processed if at least one of its sub-tasks
-                # completed with SUCCESS status AND was not a 'skipped' task.
-                is_processed = any(
-                    t.get('status') == TASK_STATUS_SUCCESS and "Skipped" not in t.get('details', {}).get('message', '')
-                    for t in tasks
-                )
+                is_processed = False
+                for t in tasks:
+                    details_dict = {}
+                    details_str = t.get('details')
+                    if details_str and isinstance(details_str, str):
+                        try:
+                            details_dict = json.loads(details_str)
+                        except json.JSONDecodeError:
+                            logger.warning(f"Could not parse details JSON for sub-task {t.get('task_id')}")
+
+                    # A batch is successfully processed if any of its attempts succeeded without being skipped.
+                    if (t.get('status') == TASK_STATUS_SUCCESS and 
+                            "Skipped" not in details_dict.get('message', '')):
+                        is_processed = True
+                        break # Found a successful run for this batch.
+                
                 if not is_processed:
                     unprocessed_batches.append(batch_id)
 
@@ -345,7 +337,8 @@ def sync_collections_task(url, email, password, num_albums):
 
         except Exception as e:
             logger.error(f"{log_prefix} An unexpected error occurred in main sync task: {e}", exc_info=True)
-            if not get_task_info_from_db(current_task_id) or get_task_info_from_db(current_task_id).get('status') != TASK_STATUS_FAILURE:
+            task_info = get_task_info_from_db(current_task_id)
+            if not task_info or task_info.get('status') != TASK_STATUS_FAILURE:
                  log_and_update(f"Error: {e}", 100, status=TASK_STATUS_FAILURE, details={"error": str(e), "traceback": traceback.format_exc()})
             raise
 

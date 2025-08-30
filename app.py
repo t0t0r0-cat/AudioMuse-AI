@@ -376,7 +376,7 @@ def get_child_tasks_from_db(parent_task_id):
     """Fetches all child tasks for a given parent_task_id from the database."""
     conn = get_db()
     cur = conn.cursor(cursor_factory=DictCursor)
-    # Select the task_id which is the job_id, and other necessary fields
+    # MODIFIED: Select the 'details' column as well for the final check.
     cur.execute("SELECT task_id, status, sub_type_identifier, details FROM task_status WHERE parent_task_id = %s", (parent_task_id,))
     tasks = cur.fetchall()
     cur.close()
@@ -659,16 +659,7 @@ def get_task_status_endpoint(task_id):
             response['state'] = db_task_info.get('status', response['state']) # Use DB status if RQ is still active
 
         response['progress'] = db_task_info.get('progress', response['progress'])
-        
-        db_details = {}
-        db_details_raw = db_task_info.get('details')
-        if db_details_raw:
-            try:
-                # If it's a string, load it as JSON. If it's already a dict, use it.
-                db_details = json.loads(db_details_raw) if isinstance(db_details_raw, str) else db_details_raw
-            except (json.JSONDecodeError, TypeError):
-                 db_details = {"raw_details": db_details_raw, "error": "Failed to parse details."}
-
+        db_details = json.loads(db_task_info.get('details')) if db_task_info.get('details') else {}
         # Merge details: RQ meta (live) can override DB details (persisted)
         response['details'] = {**db_details, **response['details']}
 
@@ -872,7 +863,7 @@ def get_last_overall_task_status_endpoint():
         last_task_data = dict(last_task_row)
         if last_task_data.get('details'):
             try: last_task_data['details'] = json.loads(last_task_data['details'])
-            except (json.JSONDecodeError, TypeError): pass
+            except json.JSONDecodeError: pass
 
         # Calculate running time in Python
         start_time = last_task_data.get('start_time')
@@ -935,7 +926,7 @@ def get_active_tasks_endpoint():
                        isinstance(task_item['details']['best_params']['clustering_method_config']['params'], dict):
                         task_item['details']['best_params']['clustering_method_config']['params'].pop('initial_centroids', None)
 
-            except (json.JSONDecodeError, TypeError):
+            except json.JSONDecodeError:
                 task_item['details'] = {"raw_details": task_item['details'], "error": "Failed to parse details JSON."}
 
         # Clean up raw time columns before sending response
