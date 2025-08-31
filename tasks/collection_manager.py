@@ -366,6 +366,22 @@ def sync_collections_task(url, email, password, num_albums):
                     unprocessed_batches_info.append(final_failure_details or 
                         {"batch_id": batch_id, "error": "Batch was skipped or status was inconclusive."})
 
+            # --- Enqueue Voyager Index Rebuild ---
+            log_and_update("Queueing Voyager index rebuild task...", 98)
+            try:
+                rebuild_job = rq_queue_default.enqueue(
+                    'tasks.voyager_manager.rebuild_voyager_index_task',
+                    job_timeout='2h',
+                    retry=Retry(max=1),
+                    job_id=f"voyager-rebuild-{uuid.uuid4()}",
+                    description=f"Voyager index rebuild triggered by sync task {current_task_id}"
+                )
+                log_and_update(f"Successfully queued Voyager index rebuild task (Job ID: {rebuild_job.id}).", 99)
+            except Exception as e:
+                logger.error(f"{log_prefix} Failed to queue Voyager index rebuild task: {e}", exc_info=True)
+                log_and_update(f"Failed to queue Voyager index rebuild task: {e}", 99, details={"warning": "Failed to queue Voyager index rebuild task."})
+            # --- End Enqueue ---
+
             if unprocessed_batches_info:
                 success_summary = f"Synchronization complete with {len(unprocessed_batches_info)}/{total_chunks} failed batches."
                 detailed_errors = [
@@ -384,4 +400,3 @@ def sync_collections_task(url, email, password, num_albums):
             if not task_info or task_info.get('status') != TASK_STATUS_FAILURE:
                  log_and_update(f"Error: {e}", 100, status=TASK_STATUS_FAILURE, details={"error": str(e), "traceback": traceback.format_exc()})
             raise
-
