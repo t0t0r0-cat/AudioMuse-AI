@@ -11,22 +11,14 @@ import uuid # For generating job IDs if needed directly in API, though tasks han
 import time
 
 # RQ imports
-
-logger = logging.getLogger(__name__)
-
-# Configure basic logging for the entire application
-logging.basicConfig(
-    level=logging.INFO, # Set the default logging level (e.g., INFO, DEBUG, WARNING, ERROR, CRITICAL)
-    format='[%(levelname)s]-[%(asctime)s]-%(message)s', # Custom format string
-    datefmt='%d-%m-%Y %H-%M-%S' # Custom date/time format
-)
-
 from redis import Redis
 from rq import Queue, Retry
 from rq.job import Job, JobStatus
 from rq.exceptions import NoSuchJobError, InvalidJobOperation
 from rq.command import send_stop_job_command
-JobStatus = JobStatus # Make JobStatus directly accessible within the app for tasks to import via `from app import JobStatus`
+
+# Werkzeug import for reverse proxy support
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 # Swagger imports
 from flasgger import Swagger, swag_from
@@ -48,8 +40,25 @@ from config import JELLYFIN_URL, JELLYFIN_USER_ID, JELLYFIN_TOKEN, HEADERS, TEMP
 
 logger = logging.getLogger(__name__)
 
+# Configure basic logging for the entire application
+logging.basicConfig(
+    level=logging.INFO, # Set the default logging level (e.g., INFO, DEBUG, WARNING, ERROR, CRITICAL)
+    format='[%(levelname)s]-[%(asctime)s]-%(message)s', # Custom format string
+    datefmt='%d-%m-%Y %H-%M-%S' # Custom date/time format
+)
+
+JobStatus = JobStatus # Make JobStatus directly accessible within the app for tasks to import via `from app import JobStatus`
+
 # --- Flask App Setup ---
 app = Flask(__name__)
+
+# *** REVERSE PROXY FIX ***
+# Apply ProxyFix middleware to make the app aware of the reverse proxy.
+# This is crucial for path-based routing (e.g., domain.com/audiomuse).
+# It tells Flask to trust the X-Forwarded-Proto, X-Forwarded-Host,
+# X-Forwarded-For, and X-Forwarded-Prefix headers sent by proxies like Traefik or Nginx.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+# *** END OF FIX ***
 
 # Log the application version on startup
 app.logger.info(f"Starting AudioMuse-AI Backend version {APP_VERSION}")

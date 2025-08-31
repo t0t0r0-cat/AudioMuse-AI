@@ -13,6 +13,7 @@ import requests # Import requests to catch specific exceptions
 # Import project modules
 from .pocketbase import PocketBaseClient
 from .mediaserver import get_recent_albums, get_tracks_from_album
+from .voyager_manager import build_and_store_voyager_index
 
 logger = logging.getLogger(__name__)
 
@@ -82,9 +83,22 @@ def sync_album_batch_task(parent_task_id, album_batch, pocketbase_url, pocketbas
 
             unique_artists = list(set(t.get('AlbumArtist', 'Unknown Artist') for t in unique_songs.values()))
             
-            logger.info(f"{log_prefix} Fetching remote records for {len(unique_artists)} artists.")
-            remote_embeddings = pb_client.get_records_by_artists(unique_artists, collection='embedding')
-            remote_scores = pb_client.get_records_by_artists(unique_artists, collection='score')
+            try:
+                logger.info(f"{log_prefix} Fetching remote records for {len(unique_artists)} artists.")
+                
+                ARTIST_CHUNK_SIZE = 2
+                remote_embeddings = []
+                remote_scores = []
+
+                for i in range(0, len(unique_artists), ARTIST_CHUNK_SIZE):
+                    artist_chunk = unique_artists[i:i + ARTIST_CHUNK_SIZE]
+                    logger.info(f"{log_prefix} Fetching data for artist chunk {i//ARTIST_CHUNK_SIZE + 1}/{(len(unique_artists) + 1)//ARTIST_CHUNK_SIZE}...")
+                    remote_embeddings.extend(pb_client.get_records_by_artists(artist_chunk, collection='embedding'))
+                    remote_scores.extend(pb_client.get_records_by_artists(artist_chunk, collection='score'))
+
+            except requests.exceptions.ConnectTimeout as e:
+                logger.error(f"{log_prefix} CRITICAL: Connection to PocketBase timed out while fetching records. This task will be retried. Error: {e}")
+                raise  # Re-raise to trigger RQ's retry mechanism
             
             remote_embedding_map = {(r['artist'].strip().lower(), r['title'].strip().lower()): r for r in remote_embeddings}
             remote_score_map = {(r['artist'].strip().lower(), r['title'].strip().lower()): r for r in remote_scores}
@@ -134,12 +148,7 @@ def sync_album_batch_task(parent_task_id, album_batch, pocketbase_url, pocketbas
 
                     if remote_embedding_record and remote_score_record:
                         try:
-                            embedding_json = remote_embedding_record.get('embedding', '[]')
-                            embedding_list = json.loads(embedding_json) if embedding_json else []
-                            embedding_vector = np.array(embedding_list).astype(np.float32)
-                            
-                            save_track_embedding(track_id, embedding_vector)
-                            
+                            # Save score data FIRST to satisfy database constraints
                             moods_str = remote_score_record.get('mood_vector', '')
                             moods = {p.split(':')[0]: float(p.split(':')[1]) for p in moods_str.split(',') if ':' in p} if moods_str else {}
                             
@@ -150,6 +159,22 @@ def sync_album_batch_task(parent_task_id, album_batch, pocketbase_url, pocketbas
                                 energy=remote_score_record.get('energy'),
                                 other_features=remote_score_record.get('other_features')
                             )
+                            
+                            # Now it is safe to save the embedding data, with a check
+                            embedding_data = remote_embedding_record.get('embedding')
+                            embedding_list = []
+                            if isinstance(embedding_data, str) and embedding_data:
+                                embedding_list = json.loads(embedding_data)
+                            elif isinstance(embedding_data, list):
+                                embedding_list = embedding_data
+                            
+                            embedding_vector = np.array(embedding_list).astype(np.float32)
+                            
+                            if embedding_vector.size > 0:
+                                save_track_embedding(track_id, embedding_vector)
+                            else:
+                                logger.warning(f"{log_prefix} Embedding data from remote for '{title}' was empty. Skipping embedding save.")
+
                             logger.info(f"{log_prefix} Synced down from remote: '{title}' by '{artist}'.")
                         except (json.JSONDecodeError, TypeError) as e:
                             logger.warning(f"{log_prefix} Could not parse/process remote record for '{title}'. Skipping sync-down. Error: {e}")
@@ -196,7 +221,7 @@ def sync_album_batch_task(parent_task_id, album_batch, pocketbase_url, pocketbas
 # --- Main task ---
 def sync_collections_task(url, email, password, num_albums):
     from app import (app, redis_conn, save_task_status, get_task_info_from_db, rq_queue_default,
-                     get_child_tasks_from_db, TASK_STATUS_STARTED, TASK_STATUS_PROGRESS,
+                     get_child_tasks_from_db, get_db, TASK_STATUS_STARTED, TASK_STATUS_PROGRESS,
                      TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED)
 
     current_job = get_current_job()
@@ -366,21 +391,18 @@ def sync_collections_task(url, email, password, num_albums):
                     unprocessed_batches_info.append(final_failure_details or 
                         {"batch_id": batch_id, "error": "Batch was skipped or status was inconclusive."})
 
-            # --- Enqueue Voyager Index Rebuild ---
-            log_and_update("Queueing Voyager index rebuild task...", 98)
+            # --- Rebuild Voyager Index and Notify Flask ---
+            log_and_update("Performing final Voyager index rebuild...", 98)
             try:
-                rebuild_job = rq_queue_default.enqueue(
-                    'tasks.voyager_manager.rebuild_voyager_index_task',
-                    job_timeout='2h',
-                    retry=Retry(max=1),
-                    job_id=f"voyager-rebuild-{uuid.uuid4()}",
-                    description=f"Voyager index rebuild triggered by sync task {current_task_id}"
-                )
-                log_and_update(f"Successfully queued Voyager index rebuild task (Job ID: {rebuild_job.id}).", 99)
+                # Directly call the function to rebuild the index and store it in the DB
+                build_and_store_voyager_index(get_db())
+                # Publish a message to the Redis 'index-updates' channel to trigger a reload in the main Flask app
+                redis_conn.publish('index-updates', 'reload')
+                log_and_update("Successfully rebuilt Voyager index and triggered a reload.", 99)
             except Exception as e:
-                logger.error(f"{log_prefix} Failed to queue Voyager index rebuild task: {e}", exc_info=True)
-                log_and_update(f"Failed to queue Voyager index rebuild task: {e}", 99, details={"warning": "Failed to queue Voyager index rebuild task."})
-            # --- End Enqueue ---
+                logger.error(f"{log_prefix} Failed during Voyager index rebuild and reload trigger: {e}", exc_info=True)
+                log_and_update(f"Failed during Voyager index rebuild: {e}", 99, details={"warning": "Failed to rebuild Voyager index."})
+            # --- End Rebuild ---
 
             if unprocessed_batches_info:
                 success_summary = f"Synchronization complete with {len(unprocessed_batches_info)}/{total_chunks} failed batches."
@@ -400,3 +422,4 @@ def sync_collections_task(url, email, password, num_albums):
             if not task_info or task_info.get('status') != TASK_STATUS_FAILURE:
                  log_and_update(f"Error: {e}", 100, status=TASK_STATUS_FAILURE, details={"error": str(e), "traceback": traceback.format_exc()})
             raise
+
