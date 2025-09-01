@@ -22,21 +22,21 @@ def collection_page():
 def start_collection_sync():
     """
     Starts the process of synchronizing local song data with a remote PocketBase collection.
-    This enqueues the main parent task for the synchronization.
+    This enqueues the main parent task for the synchronization using an auth token.
     """
     # Local import to avoid circular dependency
     from app import save_task_status, TASK_STATUS_PENDING, rq_queue_high, clean_successful_task_details_on_new_start
 
     data = request.json
-    if not data or not all(k in data for k in ['url', 'email', 'password', 'num_albums']):
-        return jsonify({"message": "Missing required parameters: url, email, password, num_albums"}), 400
+    # MODIFIED: Expect 'token' instead of 'email' and 'password'
+    if not data or not all(k in data for k in ['url', 'token', 'num_albums']):
+        return jsonify({"message": "Missing required parameters: url, token, num_albums"}), 400
     
     # Clean up previously successful sync tasks before starting a new one
     clean_successful_task_details_on_new_start()
 
     pocketbase_url = data['url']
-    user_email = data['email']
-    password = data['password']
+    pocketbase_token = data['token'] # MODIFIED
     num_last_albums = int(data['num_albums'])
     
     job_id = str(uuid.uuid4())
@@ -50,9 +50,10 @@ def start_collection_sync():
     )
 
     # Enqueue the main parent task to the high priority queue
+    # MODIFIED: Pass the token to the task
     job = rq_queue_high.enqueue(
         'tasks.collection_manager.sync_collections_task',
-        args=(pocketbase_url, user_email, password, num_last_albums),
+        args=(pocketbase_url, pocketbase_token, num_last_albums),
         job_id=job_id,
         description="Main Collection Synchronization",
         retry=Retry(max=2),
@@ -109,4 +110,3 @@ def get_last_collection_task():
         return jsonify(last_task_data), 200
         
     return jsonify({"status": "NO_PREVIOUS_TASK"}), 200
-

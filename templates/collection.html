@@ -7,6 +7,58 @@
     <title>AudioMuse-AI - Collection Sync</title>
     <link rel="stylesheet" href="/static/style.css">
     <link rel="stylesheet" href="/static/menu.css">
+    <!-- Import PocketBase SDK -->
+    <script src="https://cdn.jsdelivr.net/npm/pocketbase/dist/pocketbase.umd.js"></script>
+    <style>
+        /* Custom styles for login/logout buttons */
+        #github-login-btn {
+            background-color: #22c55e; /* Green */
+            color: white;
+            border: 1px solid #16a34a;
+            transition: background-color 0.2s ease-in-out;
+        }
+        #github-login-btn:hover {
+            background-color: #16a34a;
+        }
+        #github-login-btn:disabled {
+            background-color: #9ca3af;
+            border-color: #9ca3af;
+            cursor: not-allowed;
+            color: #e5e7eb;
+        }
+
+        #logout-btn {
+            background-color: #ef4444; /* Red */
+            color: white;
+            border: 1px solid #dc2626;
+            /* Sizing properties removed to inherit from main button style */
+            transition: background-color 0.2s ease-in-out;
+            cursor: pointer;
+        }
+        #logout-btn:hover {
+            background-color: #dc2626;
+        }
+        
+        /* Styles for the privacy policy checkbox area */
+        .privacy-ack-group {
+            margin-top: 1rem;
+            margin-bottom: 1.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.875rem;
+            color: #4b5563;
+        }
+        .privacy-ack-group input[type="checkbox"] {
+            margin-right: 0.5rem;
+            height: 1rem;
+            width: 1rem;
+        }
+        .privacy-ack-group a {
+            color: #3b82f6;
+            text-decoration: underline;
+        }
+    </style>
 </head>
 <body>
     <div class="page-container">
@@ -27,64 +79,80 @@
                             <h1>Collection Synchronization</h1>
                             <p class="subtitle">Sync your local song embeddings with a centralized Pocketbase server.</p>
                         </div>
-
-                        <form id="collection-form">
-                            <fieldset>
-                                <legend>Pocketbase Server Details</legend>
-                                <div class="param-group">
-                                    <div>
-                                        <label for="pocketbase-url">Server URL:</label>
-                                        <input type="text" id="pocketbase-url" value="https://pkb.silverycat.de/">
-                                    </div>
-                                    <div>
-                                        <label for="pocketbase-email">User Email:</label>
-                                        <input type="email" id="pocketbase-email" placeholder="your-email@example.com">
-                                    </div>
-                                    <div>
-                                        <label for="pocketbase-password">Password:</label>
-                                        <input type="password" id="pocketbase-password" placeholder="••••••••">
-                                    </div>
-                                </div>
-                            </fieldset>
-
-                            <fieldset>
-                                <legend>Sync Parameters</legend>
-                                <div class="param-group">
-                                    <div>
-                                        <label for="num-albums">Number of Last Albums to Sync:</label>
-                                        <input type="number" id="num-albums" value="10">
-                                    </div>
-                                </div>
-                            </fieldset>
-                        </form>
                     </section>
 
-                    <section>
-                        <h2>Run Sync Task</h2>
+                    <!-- Login Section -->
+                    <section id="login-section">
+                        <h2>Authentication Required</h2>
+                        <p>Please log in with your GitHub account to access the synchronization features.</p>
+                        <div class="param-group">
+                            <div>
+                                <label for="pocketbase-url">Pocketbase Server URL:</label>
+                                <input type="text" id="pocketbase-url" value="https://pkb.silverycat.de/">
+                            </div>
+                        </div>
+                        
+                        <!-- Privacy Policy Acknowledgment -->
+                        <div class="privacy-ack-group">
+                            <input type="checkbox" id="privacy-ack" name="privacy-ack">
+                            <label for="privacy-ack">I have read and agree to the <a href="https://github.com/NeptuneHub/AudioMuse-AI/blob/main/PRIVACY.md" target="_blank" id="privacy-link">Privacy Policy</a>.</label>
+                        </div>
+
                         <div class="task-buttons">
-                            <button id="start-sync-btn">Start Synchronization</button>
+                            <button id="github-login-btn" disabled>Login with GitHub</button>
                         </div>
-                        <button id="cancel-sync-btn">Cancel Current Task</button>
                     </section>
+                    
+                    <!-- Main Application Content (hidden by default) -->
+                    <div id="app-content" style="display: none;">
+                        <section>
+                             <p>Logged in as: <b id="user-info"></b></p>
+                             <div class="task-buttons">
+                                <button id="logout-btn">Logout</button>
+                             </div>
+                        </section>
 
-                    <section>
-                        <h2>Task Status</h2>
-                        <div id="task-status-display">
-                            <p><span class="status-label">Task ID:</span> <span id="status-task-id">N/A</span></p>
-                            <p><span class="status-label">Running Time:</span> <span id="status-running-time">-- : -- : --</span></p>
-                            <p><span class="status-label">Type:</span> <span id="status-task-type">N/A</span></p>
-                            <p><span class="status-label">Status:</span> <span id="status-status">IDLE</span></p>
-                            <p><span class="status-label">Status Message:</span> <span id="status-log">N/A</span></p>
-                            <p><span class="status-label">Progress:</span> <span id="status-progress">0</span>%</p>
-                            <div class="progress-bar-container">
-                                <div id="progress-bar"></div>
+                        <section>
+                            <form id="collection-form">
+                                <fieldset>
+                                    <legend>Sync Parameters</legend>
+                                    <div class="param-group">
+                                        <div>
+                                            <label for="num-albums">Number of Last Albums to Sync:</label>
+                                            <input type="number" id="num-albums" value="10">
+                                        </div>
+                                    </div>
+                                </fieldset>
+                            </form>
+                        </section>
+
+                        <section>
+                            <h2>Run Sync Task</h2>
+                            <div class="task-buttons">
+                                <button id="start-sync-btn">Start Synchronization</button>
                             </div>
-                            <div style="margin-top: 1rem;">
-                                <h3>Details / Log:</h3>
-                                <pre id="status-details"></pre>
+                            <button id="cancel-sync-btn">Cancel Current Task</button>
+                        </section>
+
+                        <section>
+                            <h2>Task Status</h2>
+                            <div id="task-status-display">
+                                <p><span class="status-label">Task ID:</span> <span id="status-task-id">N/A</span></p>
+                                <p><span class="status-label">Running Time:</span> <span id="status-running-time">-- : -- : --</span></p>
+                                <p><span class="status-label">Type:</span> <span id="status-task-type">N/A</span></p>
+                                <p><span class="status-label">Status:</span> <span id="status-status">IDLE</span></p>
+                                <p><span class="status-label">Status Message:</span> <span id="status-log">N/A</span></p>
+                                <p><span class="status-label">Progress:</span> <span id="status-progress">0</span>%</p>
+                                <div class="progress-bar-container">
+                                    <div id="progress-bar"></div>
+                                </div>
+                                <div style="margin-top: 1rem;">
+                                    <h3>Details / Log:</h3>
+                                    <pre id="status-details"></pre>
+                                </div>
                             </div>
-                        </div>
-                    </section>
+                        </section>
+                    </div>
                 </div>
             </div>
         </div>
@@ -93,3 +161,4 @@
     <script src="/static/menu.js"></script>
 </body>
 </html>
+

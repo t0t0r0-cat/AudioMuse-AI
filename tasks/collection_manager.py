@@ -219,7 +219,8 @@ def sync_album_batch_task(parent_task_id, album_batch, pocketbase_url, pocketbas
                     logger.error(f"{log_prefix} Failed to execute Lua script to release batch lock {batch_lock_key}: {e}")
 
 # --- Main task ---
-def sync_collections_task(url, email, password, num_albums):
+# MODIFIED: Changed signature to accept 'token' instead of 'email' and 'password'
+def sync_collections_task(url, token, num_albums):
     from app import (app, redis_conn, save_task_status, get_task_info_from_db, rq_queue_default,
                      get_child_tasks_from_db, get_db, TASK_STATUS_STARTED, TASK_STATUS_PROGRESS,
                      TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED)
@@ -273,21 +274,14 @@ def sync_collections_task(url, email, password, num_albums):
                 log_and_update(f"Found {len(processed_batch_identifiers)} already completed batches from a previous run. They will be skipped.", 3)
             # --- END STATEFUL RETRY LOGIC ---
 
-            pb_client = PocketBaseClient(base_url=url, email=email, password=password, log_prefix=log_prefix)
+            # MODIFIED: Instantiate client with token
+            pb_client = PocketBaseClient(base_url=url, token=token, log_prefix=log_prefix)
+            pocketbase_token = pb_client.token # The token is already set
 
-            try:
-                pb_client.authenticate()
-                pocketbase_token = pb_client.token
-            except ConnectionError as auth_error:
-                if '400' in str(auth_error):
-                    user_friendly_error = "Authentication failed. Please check the PocketBase URL, email, and password."
-                    log_and_update(user_friendly_error, 100, status=TASK_STATUS_FAILURE, details={"error": user_friendly_error, "original_error": str(auth_error)})
-                else:
-                    user_friendly_error = f"Could not connect to PocketBase server. Please verify the URL and network connectivity."
-                    log_and_update(user_friendly_error, 100, status=TASK_STATUS_FAILURE, details={"error": user_friendly_error, "original_error": str(auth_error)})
-                raise
+            # MODIFIED: Removed the explicit pb_client.authenticate() block as it's no longer needed.
+            # The first API call will validate the token.
 
-            log_and_update("Authentication successful. Fetching recent albums...", 5)
+            log_and_update("Fetching recent albums...", 5)
             albums = get_recent_albums(num_albums)
             total_albums = len(albums)
 
@@ -394,9 +388,7 @@ def sync_collections_task(url, email, password, num_albums):
             # --- Rebuild Voyager Index and Notify Flask ---
             log_and_update("Performing final Voyager index rebuild...", 98)
             try:
-                # Directly call the function to rebuild the index and store it in the DB
                 build_and_store_voyager_index(get_db())
-                # Publish a message to the Redis 'index-updates' channel to trigger a reload in the main Flask app
                 redis_conn.publish('index-updates', 'reload')
                 log_and_update("Successfully rebuilt Voyager index and triggered a reload.", 99)
             except Exception as e:
@@ -422,4 +414,3 @@ def sync_collections_task(url, email, password, num_albums):
             if not task_info or task_info.get('status') != TASK_STATUS_FAILURE:
                  log_and_update(f"Error: {e}", 100, status=TASK_STATUS_FAILURE, details={"error": str(e), "traceback": traceback.format_exc()})
             raise
-

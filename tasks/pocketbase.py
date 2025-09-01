@@ -57,12 +57,8 @@ class PocketBaseClient:
             error_body = ""
             if hasattr(e, 'response') and e.response and hasattr(e.response, 'text'):
                 try:
-                    # Try to parse JSON for cleaner logging
                     error_json = e.response.json()
-                    if "already existing" in str(error_json):
-                         error_body = "already existing song"
-                    else:
-                        error_body = json.dumps(error_json)
+                    error_body = json.dumps(error_json)
                 except json.JSONDecodeError:
                     error_body = e.response.text
             else:
@@ -73,20 +69,23 @@ class PocketBaseClient:
             raise ConnectionError(error_message) from e
 
     def _make_request(self, method, endpoint, **kwargs):
-        """Makes a request, handling re-authentication if necessary."""
+        """Makes a request, handling re-authentication for password-based clients if necessary."""
+        # MODIFIED: Only try to authenticate if not already authenticated via token.
         if 'Authorization' not in self.session.headers:
             if self.email and self.password:
                 self.authenticate()
             else:
-                raise ConnectionError("PocketBase client is not authenticated.")
+                raise ConnectionError("PocketBase client is not authenticated. Please provide a token or credentials.")
 
         kwargs.setdefault('timeout', self.timeout)
         url = f"{self.base_url}{endpoint}"
 
         try:
             response = self.session.request(method, url, **kwargs)
-            if response.status_code == 401:
-                logger.warning(f"{self.log_prefix} Token may have expired. Re-authenticating...")
+            
+            # MODIFIED: Only re-authenticate if it's a password-based client
+            if response.status_code == 401 and self.email and self.password:
+                logger.warning(f"{self.log_prefix} Token may have expired. Re-authenticating with credentials...")
                 self.authenticate()
                 response = self.session.request(method, url, **kwargs)
 
@@ -95,10 +94,9 @@ class PocketBaseClient:
         except requests.exceptions.RequestException as e:
             logger.error(f"{self.log_prefix} API request failed for {method} {endpoint}: {e}")
             if hasattr(e, 'response') and e.response is not None:
-                # Custom logging for batch request failures
                 response_text = e.response.text
                 if "already existing" in response_text:
-                    logger.warning(f"{self.log_prefix} Batch request failed because one or more songs already exist.")
+                     logger.warning(f"{self.log_prefix} Batch request failed because one or more items already exist.")
                 else:
                     logger.error(f"{self.log_prefix} Response status: {e.response.status_code}, body: {response_text}")
             raise
@@ -107,23 +105,18 @@ class PocketBaseClient:
         return value.replace('\\', '\\\\').replace('"', '\\"')
 
     def get_records_by_artists(self, artists, collection):
-        """
-        Fetches all records for a list of artists using a GET request with a shorter filter.
-        """
+        """Fetches all records for a list of artists using a GET request with a shorter filter."""
         if not artists:
             return []
         
         endpoint = f"/api/collections/{collection}/records"
-        
         ARTIST_CHUNK_SIZE = 5
         all_records = []
-        
         artist_chunks = [artists[i:i + ARTIST_CHUNK_SIZE] for i in range(0, len(artists), ARTIST_CHUNK_SIZE)]
 
         for chunk in artist_chunks:
             filter_parts = [f'artist="{self._sanitize_for_filter(artist)}"' for artist in chunk]
             filter_query = " || ".join(filter_parts)
-            
             params = { 'filter': filter_query, 'perPage': 500 }
             
             try:
@@ -152,4 +145,3 @@ class PocketBaseClient:
         except requests.exceptions.RequestException:
             logger.error(f"{self.log_prefix} The entire batch request failed and was rolled back.")
             raise
-
