@@ -428,12 +428,21 @@ def track_exists(item_id):
     cur.close()
     return row is not None
 
-def save_track_analysis(item_id, title, author, tempo, key, scale, moods, energy=None, other_features=None): # Added energy and other_features
+def save_track_analysis_and_embedding(item_id, title, author, tempo, key, scale, moods, embedding_vector, energy=None, other_features=None):
+    """Saves track analysis and embedding in a single transaction."""
+    # Sanitize string inputs to remove NUL characters
+    title = title.replace('\x00', '') if title else title
+    author = author.replace('\x00', '') if author else author
+    key = key.replace('\x00', '') if key else key
+    scale = scale.replace('\x00', '') if scale else scale
+    other_features = other_features.replace('\x00', '') if other_features else other_features
+
     mood_str = ','.join(f"{k}:{v:.3f}" for k, v in moods.items())
+    
     conn = get_db()
     cur = conn.cursor()
     try:
-        # Use ON CONFLICT DO UPDATE to ensure existing records are updated
+        # Save analysis to score table
         cur.execute("""
             INSERT INTO score (item_id, title, author, tempo, key, scale, mood_vector, energy, other_features)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -447,31 +456,20 @@ def save_track_analysis(item_id, title, author, tempo, key, scale, moods, energy
                 energy = EXCLUDED.energy,
                 other_features = EXCLUDED.other_features
         """, (item_id, title, author, tempo, key, scale, mood_str, energy, other_features))
+
+        # Save embedding
+        if isinstance(embedding_vector, np.ndarray) and embedding_vector.size > 0:
+            embedding_blob = embedding_vector.astype(np.float32).tobytes()
+            cur.execute("""
+                INSERT INTO embedding (item_id, embedding) VALUES (%s, %s)
+                ON CONFLICT (item_id) DO UPDATE SET embedding = EXCLUDED.embedding
+            """, (item_id, psycopg2.Binary(embedding_blob)))
+
         conn.commit()
     except Exception as e:
         conn.rollback()
-        logger.error("Error saving track analysis for %s: %s", item_id, e)
-    finally:
-        cur.close()
-
-def save_track_embedding(item_id, embedding_vector):
-    """Saves or updates the embedding vector for a track as an efficient binary blob."""
-    if not isinstance(embedding_vector, np.ndarray) or embedding_vector.size == 0:
-        logger.warning("Embedding vector for %s is None. Skipping save.", item_id)
-        return
-
-    conn = get_db()
-    cur = conn.cursor()
-    try:
-        # Convert numpy array to a binary blob of float32 values
-        embedding_blob = embedding_vector.astype(np.float32).tobytes()
-        cur.execute("""
-            INSERT INTO embedding (item_id, embedding) VALUES (%s, %s)
-            ON CONFLICT (item_id) DO UPDATE SET embedding = EXCLUDED.embedding
-        """, (item_id, psycopg2.Binary(embedding_blob)))
-        conn.commit()
-    except Exception as e:
-        logger.error("Error saving track embedding for %s: %s", item_id, e)
+        logger.error("Error saving track analysis and embedding for %s: %s", item_id, e)
+        raise
     finally:
         cur.close()
 

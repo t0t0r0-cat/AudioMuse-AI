@@ -66,7 +66,7 @@ def sync_album_batch_task(parent_task_id, album_batch, pocketbase_url, pocketbas
     RQ subtask to synchronize a BATCH of albums with Pocketbase.
     This de-duplicates songs, fetches all records for the relevant artists, then processes locally.
     """
-    from app import (app, redis_conn, save_task_status, get_tracks_by_ids, save_track_embedding, save_track_analysis,
+    from app import (app, redis_conn, save_task_status, get_tracks_by_ids, save_track_analysis_and_embedding,
                      get_task_info_from_db, TASK_STATUS_STARTED, TASK_STATUS_PROGRESS,
                      TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED)
 
@@ -182,19 +182,11 @@ def sync_album_batch_task(parent_task_id, album_batch, pocketbase_url, pocketbas
 
                     if remote_embedding_record and remote_score_record:
                         try:
-                            # Save score data FIRST to satisfy database constraints
+                            # Parse score data
                             moods_str = remote_score_record.get('mood_vector', '')
                             moods = {p.split(':')[0]: float(p.split(':')[1]) for p in moods_str.split(',') if ':' in p} if moods_str else {}
                             
-                            save_track_analysis(
-                                item_id=track_id, title=title, author=artist,
-                                tempo=remote_score_record.get('tempo'), key=remote_score_record.get('key'),
-                                scale=remote_score_record.get('scale'), moods=moods,
-                                energy=remote_score_record.get('energy'),
-                                other_features=remote_score_record.get('other_features')
-                            )
-                            
-                            # Now it is safe to save the embedding data, with a check
+                            # Parse embedding data
                             embedding_data = remote_embedding_record.get('embedding')
                             embedding_list = []
                             if isinstance(embedding_data, str) and embedding_data:
@@ -203,15 +195,29 @@ def sync_album_batch_task(parent_task_id, album_batch, pocketbase_url, pocketbas
                                 embedding_list = embedding_data
                             
                             embedding_vector = np.array(embedding_list).astype(np.float32)
-                            
-                            if embedding_vector.size > 0:
-                                save_track_embedding(track_id, embedding_vector)
-                            else:
-                                logger.warning(f"{log_prefix} Embedding data from remote for '{title}' was empty. Skipping embedding save.")
 
+                            if embedding_vector.size == 0:
+                                logger.warning(f"{log_prefix} Embedding data from remote for '{title}' was empty. Skipping sync-down.")
+                                continue
+
+                            # Save analysis and embedding in a single transaction
+                            save_track_analysis_and_embedding(
+                                item_id=track_id,
+                                title=title,
+                                author=artist,
+                                tempo=remote_score_record.get('tempo'),
+                                key=remote_score_record.get('key'),
+                                scale=remote_score_record.get('scale'),
+                                moods=moods,
+                                embedding_vector=embedding_vector,
+                                energy=remote_score_record.get('energy'),
+                                other_features=remote_score_record.get('other_features')
+                            )
                             logger.info(f"{log_prefix} Synced down from remote: '{title}' by '{artist}'.")
                         except (json.JSONDecodeError, TypeError) as e:
                             logger.warning(f"{log_prefix} Could not parse/process remote record for '{title}'. Skipping sync-down. Error: {e}")
+                        except Exception as e:
+                            logger.error(f"{log_prefix} Failed to save synced-down data for '{title}'. Error: {e}")
                 
                 else:
                     logger.debug(f"{log_prefix} No action needed for '{title}' by '{artist}' (State: Local={is_present_locally}, Remote={is_present_remotely}).")
@@ -403,4 +409,3 @@ def sync_collections_task(url, token, num_albums):
             if not task_info or task_info.get('status') not in [TASK_STATUS_FAILURE, TASK_STATUS_REVOKED]:
                  log_and_update(f"Error: {e}", 100, status=TASK_STATUS_FAILURE, details={"error": str(e), "traceback": traceback.format_exc()})
             raise
-

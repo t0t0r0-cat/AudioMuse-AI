@@ -163,10 +163,14 @@ def analyze_track(file_path, mood_labels_list, model_paths):
 
     # --- 1. Load Audio and Compute Basic Features ---
     try:
-        # **MODIFIED**: Use a duration limit to prevent loading excessively large files.
-        # The timeout is handled by librosa's internal mechanism when duration is set.
-        duration = AUDIO_LOAD_TIMEOUT / 60 # Convert seconds to minutes for clarity if needed, but librosa uses seconds.
+        # Use a duration limit to prevent loading excessively large files.
         audio, sr = librosa.load(file_path, sr=16000, mono=True, duration=AUDIO_LOAD_TIMEOUT)
+        
+        # --- FIX: Check for an empty audio signal after loading ---
+        if not np.any(audio) or audio.size == 0:
+            logger.warning(f"Librosa loaded an empty audio signal for {os.path.basename(file_path)}. This may be due to a corrupted file or a missing audio backend library (like libsndfile). Skipping track.")
+            return None, None
+
     except Exception as e:
         logger.warning(f"Librosa loading error for {os.path.basename(file_path)} (possibly too large or corrupt): {e}")
         return None, None
@@ -311,7 +315,7 @@ def analyze_track(file_path, mood_labels_list, model_paths):
 # MODIFIED: Removed jellyfin_url, jellyfin_user_id, jellyfin_token as they are no longer needed for the function calls.
 def analyze_album_task(album_id, album_name, top_n_moods, parent_task_id):
     from app import (app, redis_conn, get_db, save_task_status, get_task_info_from_db,
-                     save_track_analysis, save_track_embedding, JobStatus,
+                     save_track_analysis_and_embedding, JobStatus,
                      TASK_STATUS_STARTED, TASK_STATUS_PROGRESS, TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED)
     
     current_job = get_current_job(redis_conn)
@@ -406,11 +410,8 @@ def analyze_album_task(album_id, album_name, top_n_moods, parent_task_id):
                     logger.info(f"  - Top Moods: {top_moods}")
                     logger.info(f"  - Other Features: {other_features}")
                     
-                    save_track_analysis(item['Id'], item['Name'], item.get('AlbumArtist', 'Unknown'), analysis['tempo'], analysis['key'], analysis['scale'], top_moods, energy=analysis['energy'], other_features=other_features)
-                    save_track_embedding(item['Id'], embedding)
+                    save_track_analysis_and_embedding(item['Id'], item['Name'], item.get('AlbumArtist', 'Unknown'), analysis['tempo'], analysis['key'], analysis['scale'], top_moods, embedding, energy=analysis['energy'], other_features=other_features)
                     
-                    logger.info(f"Saved analysis and embedding for track ID {item['Id']} to database.")
-
                     tracks_analyzed_count += 1
                 finally:
                     if path and os.path.exists(path):
