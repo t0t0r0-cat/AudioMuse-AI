@@ -17,12 +17,7 @@ from rq import get_current_job, Retry
 from rq.job import Job
 from rq.exceptions import NoSuchJobError
 
-# Import necessary components from the main app.py file
-from app import (app, redis_conn, get_db, save_task_status, get_task_info_from_db,
-                 update_playlist_table, JobStatus,
-                 TASK_STATUS_PENDING, TASK_STATUS_STARTED, TASK_STATUS_PROGRESS,
-                 TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED,
-                 get_child_tasks_from_db)
+# NOTE: Imports from 'app' are moved inside functions to prevent circular imports.
 from psycopg2.extras import DictCursor
 
 # Import configuration
@@ -49,6 +44,32 @@ if not np.__dict__.get('float_'):
     np.float_ = np.float64
 
 logger = logging.getLogger(__name__)
+
+def batch_task_failure_handler(job, connection, type, value, tb):
+    """A failure handler for the clustering batch sub-task, executed by the worker."""
+    from app import app, save_task_status, TASK_STATUS_FAILURE
+    with app.app_context():
+        task_id = job.get_id()
+        parent_id = job.kwargs.get('parent_task_id')
+        batch_id_str = job.kwargs.get('batch_id_str')
+        
+        error_details = {
+            "message": "Clustering batch sub-task failed permanently after all retries.",
+            "error_type": str(type.__name__),
+            "error_value": str(value),
+            "traceback": "".join(traceback.format_tb(tb))
+        }
+        
+        save_task_status(
+            task_id,
+            "clustering_batch",
+            TASK_STATUS_FAILURE,
+            parent_task_id=parent_id,
+            sub_type_identifier=batch_id_str,
+            progress=100,
+            details=error_details
+        )
+        app.logger.error(f"Clustering batch task {task_id} (parent: {parent_id}) failed permanently. DB status updated.")
 
 def _sanitize_for_json(obj):
     """
@@ -96,6 +117,11 @@ def run_clustering_batch_task(
     """
     Executes a batch of clustering iterations. This task is enqueued by the main clustering task.
     """
+    # --- Local imports to prevent circular dependency ---
+    from app import (app, redis_conn, save_task_status, get_task_info_from_db,
+                     TASK_STATUS_PROGRESS, TASK_STATUS_REVOKED, TASK_STATUS_FAILURE,
+                     TASK_STATUS_SUCCESS)
+
     current_job = get_current_job(redis_conn)
     current_task_id = current_job.id if current_job else str(uuid.uuid4())
     logger.info(f"Starting clustering batch task {current_task_id} (Batch: {batch_id_str})")
@@ -228,6 +254,13 @@ def run_clustering_task(
     Main entry point for the clustering process.
     Orchestrates data preparation, batch job creation, result aggregation, and playlist creation.
     """
+    # --- Local imports to prevent circular dependency ---
+    from app import (app, redis_conn, get_db, save_task_status, get_task_info_from_db,
+                     update_playlist_table,
+                     TASK_STATUS_PENDING, TASK_STATUS_STARTED, TASK_STATUS_PROGRESS,
+                     TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED,
+                     get_child_tasks_from_db)
+
     current_job = get_current_job(redis_conn)
     current_task_id = current_job.id if current_job else str(uuid.uuid4())
     logger.info(f"Starting main clustering task {current_task_id}")
@@ -480,6 +513,10 @@ def _monitor_and_process_batches(state_dict, parent_task_id, initial_check=False
     Checks status of active jobs, processes results of finished ones.
     This function is corrected to prevent race conditions and infinite loops.
     """
+    # --- Local import to prevent circular dependency ---
+    from app import get_child_tasks_from_db, get_task_info_from_db, redis_conn, \
+                    TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED
+    
     # ALWAYS get the full list of child tasks from the database.
     # This is the single source of truth and prevents state inconsistencies.
     all_child_tasks = get_child_tasks_from_db(parent_task_id)
@@ -500,7 +537,7 @@ def _monitor_and_process_batches(state_dict, parent_task_id, initial_check=False
     for job_id in job_ids_to_check:
         try:
             job = Job.fetch(job_id, connection=redis_conn)
-            if job.is_finished or job.is_failed or job.get_status() == JobStatus.CANCELED:
+            if job.is_finished or job.is_failed or job.get_status() == 'canceled':
                 finished_job_ids.append(job_id)
         except NoSuchJobError:
             # If the job is not in RQ, it's either finished and cleaned up, or something
@@ -607,7 +644,8 @@ def _launch_batch_job(state_dict, parent_task_id, batch_idx, total_runs, genre_m
         kwargs=job_args,
         job_id=batch_job_id,
         job_timeout=-1,
-        retry=Retry(max=3)
+        retry=Retry(max=3),
+        on_failure=batch_task_failure_handler
     )
     state_dict["active_jobs"][new_job.id] = new_job
     logger.info(f"Enqueued batch job {new_job.id} for runs {start_run}-{start_run + num_iterations - 1}.")

@@ -4,7 +4,6 @@ import logging
 
 from tasks.sonic_fingerprint_manager import generate_sonic_fingerprint
 from tasks.mediaserver import resolve_jellyfin_user # Import the new resolver function
-from app import get_score_data_by_ids
 from config import MEDIASERVER_TYPE, JELLYFIN_USER_ID, JELLYFIN_TOKEN, NAVIDROME_USER, NAVIDROME_PASSWORD # Import configs
 
 logger = logging.getLogger(__name__)
@@ -119,6 +118,9 @@ def generate_sonic_fingerprint_endpoint():
       500:
         description: Server error during generation.
     """
+    # Local import to prevent circular dependency
+    from app import get_score_data_by_ids
+
     try:
         num_results = request.args.get('n', type=int)
         

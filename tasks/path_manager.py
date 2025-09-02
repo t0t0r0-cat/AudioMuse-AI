@@ -6,7 +6,6 @@ import psycopg2 # Import psycopg2 to catch specific errors
 
 # Imports from the project
 from .voyager_manager import get_vector_by_id, find_nearest_neighbors_by_vector, find_nearest_neighbors_by_id
-from app import get_db, get_score_data_by_ids, get_tracks_by_ids
 from config import (
     PATH_AVG_JUMP_SAMPLE_SIZE, PATH_CANDIDATES_PER_STEP, PATH_DEFAULT_LENGTH,
     PATH_DISTANCE_METRIC, VOYAGER_METRIC, PATH_LCORE_MULTIPLIER,
@@ -82,6 +81,8 @@ def interpolate_centroids(v1, v2, num, metric="euclidean"):
 
 def _create_path_from_ids(path_ids):
     """Helper to fetch song details for a list of IDs and format the final path."""
+    # Local import to prevent circular dependencies
+    from app import get_tracks_by_ids
     if not path_ids:
         return []
     
@@ -148,6 +149,9 @@ def _find_best_unique_song(centroid_vec, used_song_ids, used_signatures, path_so
     or too close in distance to recently added songs in the path.
     The lookback window is configurable via DUPLICATE_DISTANCE_CHECK_LOOKBACK.
     """
+    # Local import to prevent circular dependencies
+    from app import get_score_data_by_ids
+
     threshold = DUPLICATE_DISTANCE_THRESHOLD_COSINE if PATH_DISTANCE_METRIC == 'angular' else DUPLICATE_DISTANCE_THRESHOLD_EUCLIDEAN
     metric_name = 'Angular' if PATH_DISTANCE_METRIC == 'angular' else 'Euclidean'
 
@@ -215,6 +219,7 @@ def find_path_between_songs(start_item_id, end_item_id, Lreq=PATH_DEFAULT_LENGTH
     """
     Finds an adaptive path between two songs, ensuring exact length and no duplicate artist/title pairs.
     """
+    from app import get_db, get_score_data_by_ids, get_tracks_by_ids
     logger.info(f"Starting adaptive path generation from {start_item_id} to {end_item_id} with requested length {Lreq}.")
 
     start_vector = get_vector_by_id(start_item_id)

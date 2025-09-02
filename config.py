@@ -160,7 +160,7 @@ OLLAMA_SERVER_URL = os.environ.get("OLLAMA_SERVER_URL", "http://192.168.3.15:114
 OLLAMA_MODEL_NAME = os.environ.get("OLLAMA_MODEL_NAME", "mistral:7b") # Ollama model to use
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "YOUR-GEMINI-API-KEY-HERE") # Default API key
-GEMINI_MODEL_NAME = os.environ.get("GEMINI_MODEL_NAME", "gemini-1.5-flash-latest") # Default Gemini model gemini-2.5-pro, alternative gemini-1.5-flash-latest
+GEMINI_MODEL_NAME = os.environ.get("GEMINI_MODEL_NAME", "gemini-2.5-pro") # Default Gemini model gemini-2.5-pro, alternative gemini-1.5-flash-latest
 REDIS_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
 
 # Construct DATABASE_URL from individual components for better security in K8s

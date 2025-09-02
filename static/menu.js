@@ -45,7 +45,8 @@ document.addEventListener('DOMContentLoaded', function() {
         { href: '/chat', text: 'Instant Playlist' },
         { href: '/similarity', text: 'Playlist from Similar Song' },
         { href: '/path', text: 'Song Path' },
-        { href: '/sonic_fingerprint', text: 'Sonic Fingerprint' }
+        { href: '/sonic_fingerprint', text: 'Sonic Fingerprint' },
+        // { href: '/collection', text: 'Collection Sync' } // New Menu Item - commented because still experimental
     ];
 
     // Find the navigation list

@@ -19,9 +19,6 @@ from config import (
     AI_MODEL_PROVIDER, # Default AI provider
     AI_CHAT_DB_USER_NAME, AI_CHAT_DB_USER_PASSWORD, # Import new config
 )
-# Import from other project modules
-from tasks.mediaserver import create_instant_playlist
-
 from ai import get_gemini_playlist_name, get_ollama_playlist_name # Import functions to call AI
 
 # Create a Blueprint for chat-related routes
@@ -402,10 +399,12 @@ def chat_playlist_api():
         ```sql
         CAST(regexp_replace(substring(mood_vector FROM 'rock:([0-9]*\.?[0-9]+)'), 'rock:', '') AS float) >= threshold
         ```
-    * Recommended thresholds:
+    * Recommended thresholds when asked for MEDIUM or HIGH:
 
-        * `mood_vector`: ≥ 0.2
-        * `other_features`: ≥ 0.5
+        * `mood_vector`: ≥ 0.2 and < 1
+        * `other_features`: ≥ 0.5 and < 1
+        * `energy`: between ≥ 0.08 and 0.15
+        * `tempo`: between ≥ 110 and 200
 
     5. **Database Structure Reference:**
 
@@ -680,6 +679,9 @@ def create_media_server_playlist_api():
     """
     API endpoint to create a playlist on the configured media server.
     """
+    # Local import to break circular dependency at startup
+    from tasks.mediaserver import create_instant_playlist
+
     data = request.get_json()
     if not data or 'playlist_name' not in data or 'item_ids' not in data:
         return jsonify({"message": "Error: Missing playlist_name or item_ids in request"}), 400
