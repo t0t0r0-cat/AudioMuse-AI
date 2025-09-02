@@ -28,7 +28,8 @@ def collection_task_failure_handler(job, connection, type, value, tb):
             "message": "Task failed permanently after all retries.",
             "error_type": str(type.__name__),
             "error_value": str(value),
-            "traceback": "".join(traceback.format_tb(tb))
+            # MODIFIED: Use the more robust format_exception to handle all traceback types
+            "traceback": "".join(traceback.format_exception(type, value, tb))
         }
         save_task_status(
             task_id,

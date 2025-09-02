@@ -36,11 +36,18 @@ def batch_task_failure_handler(job, connection, type, value, tb):
         # Safely get args
         parent_id = job.args[0] if job.args and len(job.args) > 0 else None
         
+        # More robust traceback formatting to handle StackSummary from janitor
+        tb_formatted = ""
+        if isinstance(tb, traceback.StackSummary):
+            tb_formatted = "".join(tb.format())
+        else:
+            tb_formatted = "".join(traceback.format_exception(type, value, tb))
+
         error_details = {
             "message": "Batch sync sub-task failed permanently after all retries.",
             "error_type": str(type.__name__),
             "error_value": str(value),
-            "traceback": "".join(traceback.format_tb(tb))
+            "traceback": tb_formatted
         }
         
         # Determine sub_type_identifier from job args if possible, for completeness
@@ -106,8 +113,17 @@ def sync_album_batch_task(parent_task_id, album_batch, pocketbase_url, pocketbas
             for album in album_batch:
                 tracks = get_tracks_from_album(album.get('Id'))
                 for track in tracks:
-                    artist = track.get('AlbumArtist', 'Unknown Artist')
-                    title = track.get('Name')
+                    # Sanitize artist and title immediately to prevent issues downstream
+                    artist_raw = track.get('AlbumArtist', 'Unknown Artist')
+                    title_raw = track.get('Name', 'Unknown Title')
+                    
+                    artist = artist_raw.replace('\x00', '') if artist_raw else 'Unknown Artist'
+                    title = title_raw.replace('\x00', '') if title_raw else 'Unknown Title'
+
+                    # Update the track object itself to use the sanitized version everywhere
+                    track['AlbumArtist'] = artist
+                    track['Name'] = title
+
                     unique_songs[(artist.strip().lower(), title.strip().lower())] = track
 
             if not unique_songs:
@@ -115,7 +131,7 @@ def sync_album_batch_task(parent_task_id, album_batch, pocketbase_url, pocketbas
                 save_task_status(task_id, "album_batch_sync", TASK_STATUS_SUCCESS, parent_task_id=parent_task_id, sub_type_identifier=lock_id, progress=100, details={"message": "No songs to process."})
                 return
 
-            unique_artists = list(set(t.get('AlbumArtist', 'Unknown Artist') for t in unique_songs.values()))
+            unique_artists = list(set(t.get('AlbumArtist') for t in unique_songs.values()))
             
             try:
                 logger.info(f"{log_prefix} Fetching remote records for {len(unique_artists)} artists.")
@@ -409,3 +425,4 @@ def sync_collections_task(url, token, num_albums):
             if not task_info or task_info.get('status') not in [TASK_STATUS_FAILURE, TASK_STATUS_REVOKED]:
                  log_and_update(f"Error: {e}", 100, status=TASK_STATUS_FAILURE, details={"error": str(e), "traceback": traceback.format_exc()})
             raise
+

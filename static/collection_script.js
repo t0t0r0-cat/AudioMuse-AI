@@ -98,7 +98,8 @@ document.addEventListener('DOMContentLoaded', () => {
         statusTaskId.textContent = task.task_id || 'N/A';
         statusRunningTime.textContent = formatRunningTime(task.running_time_seconds);
         statusTaskType.textContent = task.task_type || 'N/A';
-        const stateUpper = (task.status || 'IDLE').toUpperCase();
+        // FIXED: Check for 'task.state' from the final status API endpoint, then fall back to 'task.status'
+        const stateUpper = (task.state || task.status || 'IDLE').toUpperCase();
         statusStatus.textContent = stateUpper;
         statusProgress.textContent = task.progress || 0;
         progressBar.style.width = `${task.progress || 0}%`;
