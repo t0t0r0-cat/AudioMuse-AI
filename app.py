@@ -240,25 +240,30 @@ with app.app_context():
     init_db()
 
 # --- DB Cleanup Utility ---
-def clean_successful_task_details_on_new_start():
+def clean_up_previous_main_tasks():
     """
-    Cleans the 'details' field for all MAIN tasks in the database
-    that are marked as SUCCESS. This archives them by setting their status to REVOKED.
+    Cleans up all previous main tasks before a new one starts.
+    - Archives tasks in SUCCESS state.
+    - Archives stale tasks stuck in PENDING, STARTED, or PROGRESS states.
     A main task is identified by having a NULL parent_task_id.
     """
     db = get_db()
     cur = db.cursor(cursor_factory=DictCursor)
-    app.logger.info("Starting archival of all previously successful main tasks.")
+    app.logger.info("Starting cleanup of all previous main tasks.")
+    
+    non_terminal_statuses = (TASK_STATUS_PENDING, TASK_STATUS_STARTED, TASK_STATUS_PROGRESS, TASK_STATUS_SUCCESS)
+    
     try:
-        # A main task is one without a parent.
-        cur.execute("SELECT task_id, details, task_type FROM task_status WHERE status = %s AND parent_task_id IS NULL", (TASK_STATUS_SUCCESS,))
+        cur.execute("SELECT task_id, status, details, task_type FROM task_status WHERE status IN %s AND parent_task_id IS NULL", (non_terminal_statuses,))
         tasks_to_archive = cur.fetchall()
 
         archived_count = 0
         for task_row in tasks_to_archive:
             task_id = task_row['task_id']
+            original_status = task_row['status']
+            
             original_details_json = task_row['details']
-            original_status_message = "Task completed successfully."
+            original_status_message = f"Task was in '{original_status}' state."
 
             if original_details_json:
                 try:
@@ -267,30 +272,36 @@ def clean_successful_task_details_on_new_start():
                 except (json.JSONDecodeError, TypeError):
                      app.logger.warning(f"Could not parse original details for task {task_id} during archival.")
 
+            if original_status == TASK_STATUS_SUCCESS:
+                archival_reason = "New main task started, old successful task archived."
+            else:
+                archival_reason = f"New main task started, stale task (status: {original_status}) has been archived."
+
             archived_details = {
-                "log": [f"[Archived] Task was previously successful. Original summary: {original_status_message}"],
-                "original_status_before_archival": TASK_STATUS_SUCCESS,
-                "archival_reason": "New main task started, old successful task archived."
+                "log": [f"[Archived] {archival_reason}. Original summary: {original_status_message}"],
+                "original_status_before_archival": original_status,
+                "archival_reason": archival_reason
             }
             archived_details_json = json.dumps(archived_details)
 
             with db.cursor() as update_cur:
                 update_cur.execute(
                     "UPDATE task_status SET status = %s, details = %s, progress = 100, timestamp = NOW() WHERE task_id = %s AND status = %s",
-                    (TASK_STATUS_REVOKED, archived_details_json, task_id, TASK_STATUS_SUCCESS)
+                    (TASK_STATUS_REVOKED, archived_details_json, task_id, original_status)
                 )
             archived_count += 1
 
         if archived_count > 0:
             db.commit()
-            app.logger.info(f"Archived {archived_count} previously successful main tasks.")
+            app.logger.info(f"Archived {archived_count} previous main tasks.")
         else:
-            app.logger.info("No previously successful main tasks found to archive.")
+            app.logger.info("No previous main tasks found to clean up.")
     except Exception as e_main_clean:
         db.rollback()
-        app.logger.error(f"Error during the main task archival process: {e_main_clean}")
+        app.logger.error(f"Error during the main task cleanup process: {e_main_clean}")
     finally:
         cur.close()
+
 
 # --- DB Utility Functions (used by tasks.py and API) ---
 def save_task_status(task_id, task_type, status=TASK_STATUS_PENDING, parent_task_id=None, sub_type_identifier=None, progress=0, details=None):
@@ -1056,4 +1067,3 @@ if __name__ == '__main__':
     listener_thread.start()
 
     app.run(debug=False, host='0.0.0.0', port=8000)
-

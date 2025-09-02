@@ -45,6 +45,32 @@ if not np.__dict__.get('float_'):
 
 logger = logging.getLogger(__name__)
 
+def batch_task_failure_handler(job, connection, type, value, tb):
+    """A failure handler for the clustering batch sub-task, executed by the worker."""
+    from app import app, save_task_status, TASK_STATUS_FAILURE
+    with app.app_context():
+        task_id = job.get_id()
+        parent_id = job.kwargs.get('parent_task_id')
+        batch_id_str = job.kwargs.get('batch_id_str')
+        
+        error_details = {
+            "message": "Clustering batch sub-task failed permanently after all retries.",
+            "error_type": str(type.__name__),
+            "error_value": str(value),
+            "traceback": "".join(traceback.format_tb(tb))
+        }
+        
+        save_task_status(
+            task_id,
+            "clustering_batch",
+            TASK_STATUS_FAILURE,
+            parent_task_id=parent_id,
+            sub_type_identifier=batch_id_str,
+            progress=100,
+            details=error_details
+        )
+        app.logger.error(f"Clustering batch task {task_id} (parent: {parent_id}) failed permanently. DB status updated.")
+
 def _sanitize_for_json(obj):
     """
     Recursively converts numpy arrays and numpy numeric types to native Python types
@@ -618,7 +644,8 @@ def _launch_batch_job(state_dict, parent_task_id, batch_idx, total_runs, genre_m
         kwargs=job_args,
         job_id=batch_job_id,
         job_timeout=-1,
-        retry=Retry(max=3)
+        retry=Retry(max=3),
+        on_failure=batch_task_failure_handler
     )
     state_dict["active_jobs"][new_job.id] = new_job
     logger.info(f"Enqueued batch job {new_job.id} for runs {start_run}-{start_run + num_iterations - 1}.")

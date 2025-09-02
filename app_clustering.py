@@ -2,6 +2,7 @@
 from flask import Blueprint, jsonify, request
 import uuid
 import logging
+import traceback
 
 # Import all necessary configuration variables
 from config import JELLYFIN_URL, JELLYFIN_USER_ID, JELLYFIN_TOKEN, HEADERS, TEMP_DIR, \
@@ -25,6 +26,26 @@ logger = logging.getLogger(__name__)
 
 # Create a Blueprint for clustering-related routes
 clustering_bp = Blueprint('clustering_bp', __name__)
+
+def clustering_task_failure_handler(job, connection, type, value, tb):
+    """A failure handler for the main clustering task, executed by the worker."""
+    from app import app, save_task_status, TASK_STATUS_FAILURE
+    with app.app_context():
+        task_id = job.get_id()
+        error_details = {
+            "message": "Clustering task failed permanently after all retries.",
+            "error_type": str(type.__name__),
+            "error_value": str(value),
+            "traceback": "".join(traceback.format_tb(tb))
+        }
+        save_task_status(
+            task_id,
+            "main_clustering",
+            TASK_STATUS_FAILURE,
+            progress=100,
+            details=error_details
+        )
+        app.logger.error(f"Main clustering task {task_id} failed permanently. DB status updated.")
 
 @clustering_bp.route('/api/clustering/start', methods=['POST'])
 def start_clustering_endpoint():
@@ -217,10 +238,12 @@ def start_clustering_endpoint():
     # Local imports to prevent circular dependency at startup
     from app import (
         rq_queue_high,
-        clean_successful_task_details_on_new_start,
+        clean_up_previous_main_tasks,
         save_task_status,
         get_db,
         TASK_STATUS_PENDING,
+        TASK_STATUS_STARTED,
+        TASK_STATUS_PROGRESS,
         TASK_STATUS_SUCCESS,
         TASK_STATUS_FAILURE,
         TASK_STATUS_REVOKED
@@ -229,10 +252,10 @@ def start_clustering_endpoint():
     # Check for an existing active task to prevent parallel runs
     db = get_db()
     cur = db.cursor(cursor_factory=DictCursor)
-    non_terminal_statuses = (TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED)
+    non_terminal_statuses = (TASK_STATUS_PENDING, TASK_STATUS_STARTED, TASK_STATUS_PROGRESS)
     cur.execute("""
         SELECT task_id, status FROM task_status 
-        WHERE task_type = 'main_clustering' AND status NOT IN %s
+        WHERE task_type = 'main_clustering' AND status IN %s
     """, (non_terminal_statuses,))
     active_task = cur.fetchone()
     cur.close()
@@ -247,8 +270,8 @@ def start_clustering_endpoint():
     data = request.json
     job_id = str(uuid.uuid4())
 
-    # Clean up details of previously successful tasks before starting a new one
-    clean_successful_task_details_on_new_start()
+    # Clean up details of previously successful or stale tasks before starting a new one
+    clean_up_previous_main_tasks()
     save_task_status(job_id, "main_clustering", TASK_STATUS_PENDING, details={"message": "Task enqueued."})
 
     job = rq_queue_high.enqueue(
@@ -291,6 +314,8 @@ def start_clustering_endpoint():
         job_id=job_id,
         description="Main Music Clustering",
         retry=Retry(max=3),
-        job_timeout=-1 # No timeout
+        job_timeout=-1, # No timeout
+        on_failure=clustering_task_failure_handler
     )
     return jsonify({"task_id": job.id, "task_type": "main_clustering", "status": job.get_status()}), 202
+

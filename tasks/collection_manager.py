@@ -27,6 +27,40 @@ else
 end
 """
 
+def batch_task_failure_handler(job, connection, type, value, tb):
+    """A failure handler for the album batch sync sub-task, executed by the worker."""
+    from app import app, save_task_status, TASK_STATUS_FAILURE
+    
+    with app.app_context():
+        task_id = job.get_id()
+        # Safely get args
+        parent_id = job.args[0] if job.args and len(job.args) > 0 else None
+        
+        error_details = {
+            "message": "Batch sync sub-task failed permanently after all retries.",
+            "error_type": str(type.__name__),
+            "error_value": str(value),
+            "traceback": "".join(traceback.format_tb(tb))
+        }
+        
+        # Determine sub_type_identifier from job args if possible, for completeness
+        sub_type_identifier = None
+        if job.args and len(job.args) > 1 and isinstance(job.args[1], list):
+             album_batch = job.args[1]
+             batch_album_ids = sorted([a.get('Id') for a in album_batch if a.get('Id')])
+             sub_type_identifier = hashlib.sha1(str(batch_album_ids).encode()).hexdigest()
+
+        save_task_status(
+            task_id,
+            "album_batch_sync",
+            TASK_STATUS_FAILURE,
+            parent_task_id=parent_id,
+            sub_type_identifier=sub_type_identifier,
+            progress=100,
+            details=error_details
+        )
+        app.logger.error(f"Batch sync task {task_id} (parent: {parent_id}) failed permanently. DB status updated.")
+
 def sync_album_batch_task(parent_task_id, album_batch, pocketbase_url, pocketbase_token, main_task_log_prefix="[MainTask-Unknown]"):
     """
     RQ subtask to synchronize a BATCH of albums with Pocketbase.
@@ -219,7 +253,6 @@ def sync_album_batch_task(parent_task_id, album_batch, pocketbase_url, pocketbas
                     logger.error(f"{log_prefix} Failed to execute Lua script to release batch lock {batch_lock_key}: {e}")
 
 # --- Main task ---
-# MODIFIED: Changed signature to accept 'token' instead of 'email' and 'password'
 def sync_collections_task(url, token, num_albums):
     from app import (app, redis_conn, save_task_status, get_task_info_from_db, rq_queue_default,
                      get_child_tasks_from_db, get_db, TASK_STATUS_STARTED, TASK_STATUS_PROGRESS,
@@ -253,33 +286,27 @@ def sync_collections_task(url, token, num_albums):
         try:
             log_and_update("Starting collection synchronization...", 0, status=TASK_STATUS_STARTED)
             
-            # --- STATEFUL RETRY LOGIC ---
+            # --- STATEFUL RETRY LOGIC (IMPROVED) ---
             log_and_update("Checking for existing sub-tasks for potential retry...", 2)
             all_child_tasks_initial = get_child_tasks_from_db(current_task_id)
-            processed_batch_identifiers = set()
-            for task in all_child_tasks_initial:
-                details_dict = {}
-                details_str = task.get('details')
-                if details_str and isinstance(details_str, str):
-                    try:
-                        details_dict = json.loads(details_str)
-                    except json.JSONDecodeError:
-                        pass
-                
-                if (task.get('status') == TASK_STATUS_SUCCESS and "Skipped" not in details_dict.get('message', '')):
-                    if task.get('sub_type_identifier'):
-                        processed_batch_identifiers.add(task.get('sub_type_identifier'))
+            
+            # A set of batch identifiers for batches that are considered "finished"
+            # and should not be re-queued. This includes successful, failed, and revoked batches.
+            terminal_batch_identifiers = set()
+            terminal_statuses = {TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED}
 
-            if processed_batch_identifiers:
-                log_and_update(f"Found {len(processed_batch_identifiers)} already completed batches from a previous run. They will be skipped.", 3)
+            for task in all_child_tasks_initial:
+                # If a sub-task is in any terminal state, we consider its batch processed.
+                if task.get('status') in terminal_statuses:
+                    if task.get('sub_type_identifier'):
+                        terminal_batch_identifiers.add(task.get('sub_type_identifier'))
+
+            if terminal_batch_identifiers:
+                log_and_update(f"Found {len(terminal_batch_identifiers)} already processed (success/failed/revoked) batches from a previous run. They will be skipped.", 3)
             # --- END STATEFUL RETRY LOGIC ---
 
-            # MODIFIED: Instantiate client with token
             pb_client = PocketBaseClient(base_url=url, token=token, log_prefix=log_prefix)
-            pocketbase_token = pb_client.token # The token is already set
-
-            # MODIFIED: Removed the explicit pb_client.authenticate() block as it's no longer needed.
-            # The first API call will validate the token.
+            pocketbase_token = pb_client.token
 
             log_and_update("Fetching recent albums...", 5)
             albums = get_recent_albums(num_albums)
@@ -301,7 +328,7 @@ def sync_collections_task(url, token, num_albums):
                 batch_album_ids = sorted([a.get('Id') for a in album_batch if a.get('Id')])
                 lock_id = hashlib.sha1(str(batch_album_ids).encode()).hexdigest()
 
-                if lock_id in processed_batch_identifiers:
+                if lock_id in terminal_batch_identifiers:
                     already_completed_count += 1
                     continue
 
@@ -313,7 +340,8 @@ def sync_collections_task(url, token, num_albums):
                     args=(current_task_id, album_batch, url, pocketbase_token, log_prefix),
                     job_id=str(uuid.uuid4()),
                     retry=Retry(max=2),
-                    job_timeout='1h'
+                    job_timeout='1h',
+                    on_failure=batch_task_failure_handler
                 )
                 launched_jobs.append(sub_job)
 
@@ -329,7 +357,7 @@ def sync_collections_task(url, token, num_albums):
                 all_child_tasks = get_child_tasks_from_db(current_task_id)
                 finished_tasks = [
                     t for t in all_child_tasks 
-                    if t.get('status') in [TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED]
+                    if t.get('status') in terminal_statuses
                 ]
                 total_finished_count = len(finished_tasks)
 
@@ -349,41 +377,7 @@ def sync_collections_task(url, token, num_albums):
             log_and_update("All batches have completed. Performing final check...", 96)
             all_child_tasks = get_child_tasks_from_db(current_task_id)
             
-            tasks_by_batch = {}
-            for task in all_child_tasks:
-                batch_id = task.get('sub_type_identifier')
-                if batch_id:
-                    tasks_by_batch.setdefault(batch_id, []).append(task)
-
-            unprocessed_batches_info = []
-            for batch_id, tasks in tasks_by_batch.items():
-                is_processed = False
-                final_failure_details = None
-
-                for t in tasks:
-                    details_dict = {}
-                    details_str = t.get('details')
-                    if details_str and isinstance(details_str, str):
-                        try:
-                            details_dict = json.loads(details_str)
-                        except json.JSONDecodeError:
-                            logger.warning(f"Could not parse details JSON for sub-task {t.get('task_id')}")
-
-                    if (t.get('status') == TASK_STATUS_SUCCESS and 
-                            "Skipped" not in details_dict.get('message', '')):
-                        is_processed = True
-                        break 
-                    
-                    if t.get('status') == TASK_STATUS_FAILURE:
-                        final_failure_details = {
-                            "task_id": t.get('task_id'),
-                            "error": details_dict.get('error', 'Unknown error'),
-                            "batch_name": details_dict.get('batch_name', 'Unknown Batch')
-                        }
-                
-                if not is_processed:
-                    unprocessed_batches_info.append(final_failure_details or 
-                        {"batch_id": batch_id, "error": "Batch was skipped or status was inconclusive."})
+            failed_child_tasks = [t for t in all_child_tasks if t.get('status') == TASK_STATUS_FAILURE]
 
             # --- Rebuild Voyager Index and Notify Flask ---
             log_and_update("Performing final Voyager index rebuild...", 98)
@@ -396,21 +390,17 @@ def sync_collections_task(url, token, num_albums):
                 log_and_update(f"Failed during Voyager index rebuild: {e}", 99, details={"warning": "Failed to rebuild Voyager index."})
             # --- End Rebuild ---
 
-            if unprocessed_batches_info:
-                success_summary = f"Synchronization complete with {len(unprocessed_batches_info)}/{total_chunks} failed batches."
-                detailed_errors = [
-                    f"  - Batch '{info.get('batch_name', 'N/A')}' failed in task {info.get('task_id', 'N/A')} with error: {info.get('error', 'N/A').splitlines()[0]}" 
-                    for info in unprocessed_batches_info
-                ]
-                full_success_message = f"{success_summary}\n\nDetails of failed batches:\n" + "\n".join(detailed_errors)
-                
-                log_and_update(success_summary, 100, status=TASK_STATUS_SUCCESS, details={"message": full_success_message, "unprocessed_batches": unprocessed_batches_info})
+            if failed_child_tasks:
+                num_failed = len(failed_child_tasks)
+                summary_message = f"Synchronization complete with {num_failed}/{total_chunks} failed batches."
+                log_and_update(summary_message, 100, status=TASK_STATUS_SUCCESS, details={"message": summary_message, "failed_subtasks": num_failed})
             else:
                 log_and_update("All batches completed successfully.", 100, status=TASK_STATUS_SUCCESS)
 
         except Exception as e:
             logger.error(f"{log_prefix} An unexpected error occurred in main sync task: {e}", exc_info=True)
             task_info = get_task_info_from_db(current_task_id)
-            if not task_info or task_info.get('status') != TASK_STATUS_FAILURE:
+            if not task_info or task_info.get('status') not in [TASK_STATUS_FAILURE, TASK_STATUS_REVOKED]:
                  log_and_update(f"Error: {e}", 100, status=TASK_STATUS_FAILURE, details={"error": str(e), "traceback": traceback.format_exc()})
             raise
+

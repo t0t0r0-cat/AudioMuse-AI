@@ -399,10 +399,12 @@ def chat_playlist_api():
         ```sql
         CAST(regexp_replace(substring(mood_vector FROM 'rock:([0-9]*\.?[0-9]+)'), 'rock:', '') AS float) >= threshold
         ```
-    * Recommended thresholds:
+    * Recommended thresholds when asked for MEDIUM or HIGH:
 
-        * `mood_vector`: ≥ 0.2
-        * `other_features`: ≥ 0.5
+        * `mood_vector`: ≥ 0.2 and < 1
+        * `other_features`: ≥ 0.5 and < 1
+        * `energy`: between ≥ 0.08 and 0.15
+        * `tempo`: between ≥ 110 and 200
 
     5. **Database Structure Reference:**
 

@@ -81,6 +81,8 @@ def interpolate_centroids(v1, v2, num, metric="euclidean"):
 
 def _create_path_from_ids(path_ids):
     """Helper to fetch song details for a list of IDs and format the final path."""
+    # Local import to prevent circular dependencies
+    from app import get_tracks_by_ids
     if not path_ids:
         return []
     
@@ -147,6 +149,9 @@ def _find_best_unique_song(centroid_vec, used_song_ids, used_signatures, path_so
     or too close in distance to recently added songs in the path.
     The lookback window is configurable via DUPLICATE_DISTANCE_CHECK_LOOKBACK.
     """
+    # Local import to prevent circular dependencies
+    from app import get_score_data_by_ids
+
     threshold = DUPLICATE_DISTANCE_THRESHOLD_COSINE if PATH_DISTANCE_METRIC == 'angular' else DUPLICATE_DISTANCE_THRESHOLD_EUCLIDEAN
     metric_name = 'Angular' if PATH_DISTANCE_METRIC == 'angular' else 'Euclidean'
 

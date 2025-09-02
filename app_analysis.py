@@ -63,7 +63,7 @@ def start_analysis_endpoint():
         description: Server error during task enqueue.
     """
     # Local import to prevent circular dependency at startup
-    from app import clean_successful_task_details_on_new_start, save_task_status, TASK_STATUS_PENDING, rq_queue_high
+    from app import clean_up_previous_main_tasks, save_task_status, TASK_STATUS_PENDING, rq_queue_high
 
     data = request.json or {}
     # MODIFIED: Removed jellyfin_url, jellyfin_user_id, and jellyfin_token as they are no longer passed to the task.
@@ -73,8 +73,8 @@ def start_analysis_endpoint():
 
     job_id = str(uuid.uuid4())
 
-    # Clean up details of previously successful tasks before starting a new one
-    clean_successful_task_details_on_new_start()
+    # Clean up details of previously successful or stale tasks before starting a new one
+    clean_up_previous_main_tasks()
     save_task_status(job_id, "main_analysis", TASK_STATUS_PENDING, details={"message": "Task enqueued."})
 
     # Enqueue task using a string path to its function.

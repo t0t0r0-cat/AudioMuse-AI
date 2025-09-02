@@ -4,6 +4,7 @@ import uuid
 import logging
 import json
 import time
+import traceback
 
 from rq import Retry
 from psycopg2.extras import DictCursor
@@ -18,6 +19,26 @@ def collection_page():
     """Serves the HTML page for the Collection Sync feature."""
     return render_template('collection.html')
 
+def collection_task_failure_handler(job, connection, type, value, tb):
+    """A failure handler for the main collection sync task, executed by the worker."""
+    from app import app, save_task_status, TASK_STATUS_FAILURE
+    with app.app_context():
+        task_id = job.get_id()
+        error_details = {
+            "message": "Task failed permanently after all retries.",
+            "error_type": str(type.__name__),
+            "error_value": str(value),
+            "traceback": "".join(traceback.format_tb(tb))
+        }
+        save_task_status(
+            task_id,
+            "main_collection_sync",
+            TASK_STATUS_FAILURE,
+            progress=100,
+            details=error_details
+        )
+        app.logger.error(f"Main collection sync task {task_id} failed permanently. DB status updated.")
+
 @collection_bp.route('/api/collection/start', methods=['POST'])
 def start_collection_sync():
     """
@@ -25,15 +46,15 @@ def start_collection_sync():
     This enqueues the main parent task for the synchronization using an auth token.
     """
     # Local import to avoid circular dependency
-    from app import save_task_status, TASK_STATUS_PENDING, rq_queue_high, clean_successful_task_details_on_new_start
+    from app import save_task_status, TASK_STATUS_PENDING, rq_queue_high, clean_up_previous_main_tasks
 
     data = request.json
     # MODIFIED: Expect 'token' instead of 'email' and 'password'
     if not data or not all(k in data for k in ['url', 'token', 'num_albums']):
         return jsonify({"message": "Missing required parameters: url, token, num_albums"}), 400
     
-    # Clean up previously successful sync tasks before starting a new one
-    clean_successful_task_details_on_new_start()
+    # Clean up previously successful or stale sync tasks before starting a new one
+    clean_up_previous_main_tasks()
 
     pocketbase_url = data['url']
     pocketbase_token = data['token'] # MODIFIED
@@ -57,7 +78,8 @@ def start_collection_sync():
         job_id=job_id,
         description="Main Collection Synchronization",
         retry=Retry(max=2),
-        job_timeout='2h' # Set a reasonable timeout for the parent task
+        job_timeout='2h', # Set a reasonable timeout for the parent task
+        on_failure=collection_task_failure_handler
     )
 
     return jsonify({
@@ -110,3 +132,4 @@ def get_last_collection_task():
         return jsonify(last_task_data), 200
         
     return jsonify({"status": "NO_PREVIOUS_TASK"}), 200
+
