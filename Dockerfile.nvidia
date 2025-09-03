@@ -41,7 +41,7 @@ RUN apt-get install -y --no-install-recommends \
 # Upgrade pip to a newer version that supports necessary flags and is more robust
 RUN pip3 install --no-cache-dir --upgrade pip
 
-# Install Python packages, with conditional TensorFlow installation for ARM
+# Install Python packages, adding pydub for audio conversion fallback
 ARG TARGETARCH
 RUN if [ "$TARGETARCH" = "arm64" ]; then \
       pip3 install --no-cache-dir \
@@ -60,6 +60,7 @@ RUN if [ "$TARGETARCH" = "arm64" ]; then \
         flasgger \
         sqlglot \
         google-generativeai \
+        pydub \
         tensorflow-aarch64==2.15.0 \
         librosa; \
     else \
@@ -79,6 +80,7 @@ RUN if [ "$TARGETARCH" = "arm64" ]; then \
         flasgger \
         sqlglot \
         google-generativeai \
+        pydub \
         tensorflow[and-gpu]==2.20.0 \
         librosa; \
     fi

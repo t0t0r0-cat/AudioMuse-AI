@@ -10,7 +10,7 @@ WORKDIR /app
 RUN apt-get clean && rm -rf /var/lib/apt/lists/* && \
     apt-get update -o Acquire::Retries=5 -o Acquire::Timeout=30
 
-# Install system dependencies, removed libtag1v5 as a potential source of 404s
+# Install system dependencies, including ffmpeg which is crucial for pydub
 RUN apt-get install -y --no-install-recommends \
     python3 python3-pip python3-dev \
     libfftw3-3 libyaml-0-2 libsamplerate0 \
@@ -28,10 +28,10 @@ RUN apt-get install -y --no-install-recommends \
     g++ \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Upgrade pip to a newer version that supports necessary flags and is more robust
+# Upgrade pip to a newer version
 RUN pip3 install --no-cache-dir --upgrade pip
 
-# Install Python packages, with conditional TensorFlow installation for ARM
+# Install Python packages, adding pydub for audio conversion
 ARG TARGETARCH
 RUN if [ "$TARGETARCH" = "arm64" ]; then \
       pip3 install --no-cache-dir \
@@ -50,6 +50,7 @@ RUN if [ "$TARGETARCH" = "arm64" ]; then \
         flasgger \
         sqlglot \
         google-generativeai \
+        pydub \
         tensorflow-aarch64==2.15.0 \
         librosa; \
     else \
@@ -69,16 +70,15 @@ RUN if [ "$TARGETARCH" = "arm64" ]; then \
         flasgger \
         sqlglot \
         google-generativeai \
+        pydub \
         tensorflow==2.15.0 \
         librosa; \
     fi
 
-# Removed essentia-tensorflow as it's no longer used
-
 # Create the model directory
 RUN mkdir -p /app/model
 
-# Download models from the GitHub release (corrected URL)
+# Download models from the GitHub release
 RUN wget -q -P /app/model \
     https://github.com/NeptuneHub/AudioMuse-AI/releases/download/v1.0.0-model/danceability-msd-musicnn-1.pb \
     https://github.com/NeptuneHub/AudioMuse-AI/releases/download/v1.0.0-model/mood_aggressive-audioset-vggish-1.pb \
@@ -106,3 +106,4 @@ EXPOSE 8000
 
 WORKDIR /workspace
 CMD ["bash", "-c", "if [ \"$SERVICE_TYPE\" = \"worker\" ]; then echo 'Starting worker processes via supervisord...' && /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf; else echo 'Starting web service...' && python3 /app/app.py; fi"]
+
