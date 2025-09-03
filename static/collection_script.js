@@ -25,6 +25,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const statusLog = document.getElementById('status-log');
     const statusDetails = document.getElementById('status-details');
 
+    // --- FIXED: References for moving the privacy policy element ---
+    const privacyGroup = document.querySelector('.privacy-ack-group');
+    const loginButtonContainer = githubLoginBtn.parentElement;
+    const logoutButtonContainer = logoutBtn.parentElement;
+
     // --- Core & Auth Functions ---
     function initialize() {
         try {
@@ -43,13 +48,28 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function updateUI() {
         if (pb && pb.authStore.isValid) {
+            // --- User is LOGGED IN ---
             loginSection.style.display = 'none';
             appContent.style.display = 'block';
             const user = pb.authStore.model;
             userInfoDisplay.textContent = user.email || user.username || user.id;
+
+            // --- FIXED: Move privacy policy group to the logged-in section ---
+            // It's placed just before the logout button's container.
+            logoutButtonContainer.before(privacyGroup);
+            privacyCheckbox.checked = true;
+            privacyCheckbox.disabled = true; // Make it uncheckable
+
         } else {
+            // --- User is LOGGED OUT ---
             loginSection.style.display = 'block';
             appContent.style.display = 'none';
+
+            // --- FIXED: Move privacy policy group back to the login section ---
+            // It's placed just before the login button's container.
+            loginButtonContainer.before(privacyGroup);
+            privacyCheckbox.disabled = false; // Make it checkable again
+            githubLoginBtn.disabled = !privacyCheckbox.checked; // Re-evaluate button state
         }
     }
 
@@ -80,8 +100,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function logout() {
         if (pb) pb.authStore.clear();
+        // --- FIXED: Also uncheck the privacy box on logout ---
+        privacyCheckbox.checked = false;
         showMessageBox('Logged Out', 'You have been successfully logged out.');
-        updateUI();
+        updateUI(); // This call will move the element and update all UI states correctly.
     }
 
     // --- Task Management Functions ---
@@ -98,7 +120,6 @@ document.addEventListener('DOMContentLoaded', () => {
         statusTaskId.textContent = task.task_id || 'N/A';
         statusRunningTime.textContent = formatRunningTime(task.running_time_seconds);
         statusTaskType.textContent = task.task_type || 'N/A';
-        // FIXED: Check for 'task.state' from the final status API endpoint, then fall back to 'task.status'
         const stateUpper = (task.state || task.status || 'IDLE').toUpperCase();
         statusStatus.textContent = stateUpper;
         statusProgress.textContent = task.progress || 0;
@@ -113,10 +134,10 @@ document.addEventListener('DOMContentLoaded', () => {
         let statusMessage = 'N/A';
         if (task.details && typeof task.details === 'object') {
              statusMessage = (Array.isArray(task.details.log) && task.details.log.length > 0) 
-                ? task.details.log[task.details.log.length - 1] 
-                : (task.details.message || 'No message.');
+                 ? task.details.log[task.details.log.length - 1] 
+                 : (task.details.message || 'No message.');
         } else if (task.details) {
-            statusMessage = task.details.toString();
+             statusMessage = task.details.toString();
         }
         statusLog.textContent = statusMessage;
         statusDetails.textContent = typeof task.details === 'object' ? JSON.stringify(task.details, null, 2) : task.details;

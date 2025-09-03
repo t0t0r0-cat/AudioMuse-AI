@@ -93,6 +93,7 @@
                         </div>
                         
                         <!-- Privacy Policy Acknowledgment -->
+                        <!-- This div will be moved by JavaScript when the user logs in -->
                         <div class="privacy-ack-group">
                             <input type="checkbox" id="privacy-ack" name="privacy-ack">
                             <label for="privacy-ack">I have read and agree to the <a href="https://github.com/NeptuneHub/AudioMuse-AI/blob/main/PRIVACY.md" target="_blank" id="privacy-link">Privacy Policy</a>.</label>
@@ -107,8 +108,9 @@
                     <div id="app-content" style="display: none;">
                         <section>
                              <p>Logged in as: <b id="user-info"></b></p>
+                             <!-- The Privacy Policy group will be moved here by JS -->
                              <div class="task-buttons">
-                                <button id="logout-btn">Logout</button>
+                                 <button id="logout-btn">Logout</button>
                              </div>
                         </section>
 
@@ -161,4 +163,3 @@
     <script src="/static/menu.js"></script>
 </body>
 </html>
-
