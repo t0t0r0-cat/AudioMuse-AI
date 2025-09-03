@@ -76,16 +76,18 @@
                 <div id="main-content-inner">
                     <section>
                         <div class="page-header">
-                            <h1>Collection Synchronization [EXPERIMENTAL-STILL-IN-DEVELOPMENT]</h1>
-                            <p class="subtitle">Sync your local song embeddings with a centralized Pocketbase server.</p>
+                            <h1>Collection Synchronization [EXPERIMENTAL]</h1>
+                            <p class="subtitle">Sync your songs analysis with a centralized cloud database.</p>
                         </div>
                     </section>
 
                     <!-- Login Section -->
                     <section id="login-section">
                         <h2>Authentication Required</h2>
-                        <p>Please log in with your GitHub account to access the synchronization features.</p>
-                        <div class="param-group">
+                        <p>Please log in with your GitHub account to enable synchronization.</p>
+                        <p>Continue only if you are comfortable with your data leaving your local environment.</p>
+
+                        <div class="param-group" style="display: none;">
                             <div>
                                 <label for="pocketbase-url">Pocketbase Server URL:</label>
                                 <input type="text" id="pocketbase-url" value="https://pkb.silverycat.de/">
@@ -163,3 +165,4 @@
     <script src="/static/menu.js"></script>
 </body>
 </html>
+
