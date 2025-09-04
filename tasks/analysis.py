@@ -181,21 +181,30 @@ def robust_load_audio_with_fallback(file_path, target_sr=16000):
     # --- Fallback Method: Convert to WAV with pydub ---
     temp_wav_path = None
     try:
+        # Check the audio content with pydub before converting
         audio_segment = AudioSegment.from_file(file_path)
-        
+        if len(audio_segment) == 0:
+            logger.error(f"Pydub loaded a zero-duration audio segment from {os.path.basename(file_path)}. The file is likely corrupt or empty.")
+            return None, None
+
         with NamedTemporaryFile(suffix=".wav", delete=False) as temp_wav_file:
             temp_wav_path = temp_wav_file.name
-
-        audio_segment.export(temp_wav_path, format="wav")
+        
+        # --- MEMORY OPTIMIZATION FOR LARGE FILES ---
+        # Resample and convert to mono during export to create a much smaller temp file.
+        # This is critical for handling very large source files without running out of memory.
+        logger.info(f"Fallback: Pre-processing {os.path.basename(file_path)} to a smaller WAV for safe loading...")
+        processed_segment = audio_segment.set_frame_rate(target_sr).set_channels(1)
+        processed_segment.export(temp_wav_path, format="wav")
         
         logger.info(f"Fallback: Converted {os.path.basename(file_path)} to temporary WAV for robust loading.")
         
-        # Load the safe WAV file
+        # Load the safe, downsampled WAV file
         audio, sr = librosa.load(temp_wav_path, sr=target_sr, mono=True, duration=AUDIO_LOAD_TIMEOUT)
         
-        # Final check on the fallback's output
-        if audio is None or audio.size == 0:
-            logger.error(f"Fallback method also resulted in an empty audio signal for {os.path.basename(file_path)}.")
+        # Final check on the fallback's output for silence or emptiness
+        if audio is None or audio.size == 0 or not np.any(audio):
+            logger.error(f"Fallback method also resulted in an empty or silent audio signal for {os.path.basename(file_path)}.")
             return None, None
             
         return audio, sr
