@@ -205,7 +205,7 @@ def start_clustering_endpoint():
               enable_clustering_embeddings:
                 type: boolean
                 description: Whether to use embeddings for clustering (True) or score_vector (False).
-                default: false
+                default: true
     responses:
       202:
         description: Clustering task successfully enqueued.
@@ -318,4 +318,3 @@ def start_clustering_endpoint():
         on_failure=clustering_task_failure_handler
     )
     return jsonify({"task_id": job.id, "task_type": "main_clustering", "status": job.get_status()}), 202
-

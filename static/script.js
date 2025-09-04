@@ -137,6 +137,7 @@ function renderConfig(config) {
     // CORRECTED: Fixed variable names to match the Python config.
     document.getElementById('config-score_weight_other_feature_diversity').value = config.score_weight_other_feature_diversity || 0;
     document.getElementById('config-score_weight_other_feature_purity').value = config.score_weight_other_feature_purity || 0;
+    document.getElementById('config-enable_clustering_embeddings').checked = config.enable_clustering_embeddings;
 
     // Algorithm Specific
     document.getElementById('config-dbscan_eps_min').value = config.dbscan_eps_min || 0;
