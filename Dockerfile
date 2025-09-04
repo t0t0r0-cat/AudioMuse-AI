@@ -97,7 +97,7 @@ COPY --from=models /app/model/ /app/model/
 
 COPY . /app
 
-COPY deplyment/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+COPY deployment/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
 # Or it will take all available memory
 ENV TF_FORCE_GPU_ALLOW_GROWTH=true
