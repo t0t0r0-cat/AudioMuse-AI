@@ -10,6 +10,8 @@ import random
 import logging
 import uuid
 import traceback
+from pydub import AudioSegment
+from tempfile import NamedTemporaryFile
 
 import librosa
 import tensorflow.compat.v1 as tf
@@ -153,6 +155,59 @@ def sigmoid(x):
     """Numerically stable sigmoid function."""
     return 1 / (1 + np.exp(-x))
 
+def robust_load_audio_with_fallback(file_path, target_sr=16000):
+    """
+    Attempts to load an audio file directly with Librosa. If it fails or
+    results in an empty audio signal, it falls back to a more robust method
+    using pydub (and ffmpeg) to convert the file to a temporary WAV before loading.
+    """
+    audio = None
+    sr = None
+    
+    # --- Primary Method: Direct Librosa Load ---
+    try:
+        audio, sr = librosa.load(file_path, sr=target_sr, mono=True, duration=AUDIO_LOAD_TIMEOUT)
+        
+        # An empty audio signal is a failure condition, so we raise an error to trigger the fallback.
+        if audio is None or audio.size == 0:
+            raise ValueError("Librosa returned an empty audio signal.")
+            
+        logger.debug(f"Successfully loaded {os.path.basename(file_path)} directly with Librosa.")
+        return audio, sr
+
+    except Exception as e_direct_load:
+        logger.warning(f"Direct librosa load failed for {os.path.basename(file_path)}: {e_direct_load}. Attempting fallback conversion.")
+
+    # --- Fallback Method: Convert to WAV with pydub ---
+    temp_wav_path = None
+    try:
+        audio_segment = AudioSegment.from_file(file_path)
+        
+        with NamedTemporaryFile(suffix=".wav", delete=False) as temp_wav_file:
+            temp_wav_path = temp_wav_file.name
+
+        audio_segment.export(temp_wav_path, format="wav")
+        
+        logger.info(f"Fallback: Converted {os.path.basename(file_path)} to temporary WAV for robust loading.")
+        
+        # Load the safe WAV file
+        audio, sr = librosa.load(temp_wav_path, sr=target_sr, mono=True, duration=AUDIO_LOAD_TIMEOUT)
+        
+        # Final check on the fallback's output
+        if audio is None or audio.size == 0:
+            logger.error(f"Fallback method also resulted in an empty audio signal for {os.path.basename(file_path)}.")
+            return None, None
+            
+        return audio, sr
+
+    except Exception as e_fallback:
+        logger.error(f"Fallback loading method also failed for {os.path.basename(file_path)}: {e_fallback}")
+        return None, None
+    finally:
+        # Clean up the temporary WAV file if it was created
+        if temp_wav_path and os.path.exists(temp_wav_path):
+            os.remove(temp_wav_path)
+
 def analyze_track(file_path, mood_labels_list, model_paths):
     """
     Analyzes a single track. This function is now completely self-contained to ensure
@@ -162,13 +217,10 @@ def analyze_track(file_path, mood_labels_list, model_paths):
     logger.info(f"Starting analysis for: {os.path.basename(file_path)}")
 
     # --- 1. Load Audio and Compute Basic Features ---
-    try:
-        # **MODIFIED**: Use a duration limit to prevent loading excessively large files.
-        # The timeout is handled by librosa's internal mechanism when duration is set.
-        duration = AUDIO_LOAD_TIMEOUT / 60 # Convert seconds to minutes for clarity if needed, but librosa uses seconds.
-        audio, sr = librosa.load(file_path, sr=16000, mono=True, duration=AUDIO_LOAD_TIMEOUT)
-    except Exception as e:
-        logger.warning(f"Librosa loading error for {os.path.basename(file_path)} (possibly too large or corrupt): {e}")
+    audio, sr = robust_load_audio_with_fallback(file_path, target_sr=16000)
+    
+    if audio is None or not np.any(audio) or audio.size == 0:
+        logger.warning(f"Could not load a valid audio signal for {os.path.basename(file_path)} after all attempts. Skipping track.")
         return None, None
 
     tempo, _ = librosa.beat.beat_track(y=audio, sr=sr)
@@ -311,7 +363,7 @@ def analyze_track(file_path, mood_labels_list, model_paths):
 # MODIFIED: Removed jellyfin_url, jellyfin_user_id, jellyfin_token as they are no longer needed for the function calls.
 def analyze_album_task(album_id, album_name, top_n_moods, parent_task_id):
     from app import (app, redis_conn, get_db, save_task_status, get_task_info_from_db,
-                     save_track_analysis, save_track_embedding, JobStatus,
+                     save_track_analysis_and_embedding, JobStatus,
                      TASK_STATUS_STARTED, TASK_STATUS_PROGRESS, TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED)
     
     current_job = get_current_job(redis_conn)
@@ -406,11 +458,8 @@ def analyze_album_task(album_id, album_name, top_n_moods, parent_task_id):
                     logger.info(f"  - Top Moods: {top_moods}")
                     logger.info(f"  - Other Features: {other_features}")
                     
-                    save_track_analysis(item['Id'], item['Name'], item.get('AlbumArtist', 'Unknown'), analysis['tempo'], analysis['key'], analysis['scale'], top_moods, energy=analysis['energy'], other_features=other_features)
-                    save_track_embedding(item['Id'], embedding)
+                    save_track_analysis_and_embedding(item['Id'], item['Name'], item.get('AlbumArtist', 'Unknown'), analysis['tempo'], analysis['key'], analysis['scale'], top_moods, embedding, energy=analysis['energy'], other_features=other_features)
                     
-                    logger.info(f"Saved analysis and embedding for track ID {item['Id']} to database.")
-
                     tracks_analyzed_count += 1
                 finally:
                     if path and os.path.exists(path):
@@ -423,7 +472,6 @@ def analyze_album_task(album_id, album_name, top_n_moods, parent_task_id):
         except OperationalError as e:
             logger.error(f"Database connection error during album analysis {album_id}: {e}. This job will be retried.", exc_info=True)
             log_and_update_album_task(f"Database connection failed for album '{album_name}'. Retrying...", current_progress_val, task_state=TASK_STATUS_FAILURE, final_summary_details={"error": str(e), "traceback": traceback.format_exc()})
-            # Re-raising the exception is crucial for RQ to trigger the retry mechanism
             raise
         except Exception as e:
             logger.critical(f"Album analysis {album_id} failed: {e}", exc_info=True)
@@ -580,3 +628,4 @@ def run_analysis_task(num_recent_albums, top_n_moods):
             logger.critical(f"FATAL ERROR: Analysis failed: {e}", exc_info=True)
             log_and_update_main(f"❌ Main analysis failed: {e}", current_progress, task_state=TASK_STATUS_FAILURE, error_message=str(e), traceback=traceback.format_exc())
             raise
+

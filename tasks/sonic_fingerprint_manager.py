@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from config import SONIC_FINGERPRINT_TOP_N_SONGS, SONIC_FINGERPRINT_NEIGHBORS
 from .mediaserver import get_top_played_songs, get_last_played_time
 from .voyager_manager import find_nearest_neighbors_by_vector
-from app import get_tracks_by_ids
+
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +22,7 @@ def generate_sonic_fingerprint(num_neighbors=None, user_creds=None):
                                      For Jellyfin: {'user_id': '...', 'token': '...'}
                                      For Navidrome: {'user': '...', 'password': '...'}
     """
+    from app import get_tracks_by_ids
     logger.info("Generating sonic fingerprint...")
 
     # Determine the total desired size for the final playlist

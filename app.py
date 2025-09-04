@@ -11,22 +11,14 @@ import uuid # For generating job IDs if needed directly in API, though tasks han
 import time
 
 # RQ imports
-
-logger = logging.getLogger(__name__)
-
-# Configure basic logging for the entire application
-logging.basicConfig(
-    level=logging.INFO, # Set the default logging level (e.g., INFO, DEBUG, WARNING, ERROR, CRITICAL)
-    format='[%(levelname)s]-[%(asctime)s]-%(message)s', # Custom format string
-    datefmt='%d-%m-%Y %H-%M-%S' # Custom date/time format
-)
-
 from redis import Redis
 from rq import Queue, Retry
 from rq.job import Job, JobStatus
 from rq.exceptions import NoSuchJobError, InvalidJobOperation
 from rq.command import send_stop_job_command
-JobStatus = JobStatus # Make JobStatus directly accessible within the app for tasks to import via `from app import JobStatus`
+
+# Werkzeug import for reverse proxy support
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 # Swagger imports
 from flasgger import Swagger, swag_from
@@ -41,14 +33,32 @@ from config import JELLYFIN_URL, JELLYFIN_USER_ID, JELLYFIN_TOKEN, HEADERS, TEMP
     DBSCAN_MIN_SAMPLES_MIN, DBSCAN_MIN_SAMPLES_MAX, GMM_N_COMPONENTS_MIN, GMM_N_COMPONENTS_MAX, \
     SPECTRAL_N_CLUSTERS_MIN, SPECTRAL_N_CLUSTERS_MAX, ENABLE_CLUSTERING_EMBEDDINGS, \
     PCA_COMPONENTS_MIN, PCA_COMPONENTS_MAX, CLUSTERING_RUNS, MOOD_LABELS, TOP_N_MOODS, APP_VERSION, \
-    AI_MODEL_PROVIDER, OLLAMA_SERVER_URL, OLLAMA_MODEL_NAME, GEMINI_API_KEY, GEMINI_MODEL_NAME, TOP_N_PLAYLISTS
+    AI_MODEL_PROVIDER, OLLAMA_SERVER_URL, OLLAMA_MODEL_NAME, GEMINI_API_KEY, GEMINI_MODEL_NAME, TOP_N_PLAYLISTS, \
+    PATH_DISTANCE_METRIC # --- NEW: Import path distance metric ---
 
 # NOTE: Annoy Manager import is moved to be local where used to prevent circular imports.
 
 logger = logging.getLogger(__name__)
 
+# Configure basic logging for the entire application
+logging.basicConfig(
+    level=logging.INFO, # Set the default logging level (e.g., INFO, DEBUG, WARNING, ERROR, CRITICAL)
+    format='[%(levelname)s]-[%(asctime)s]-%(message)s', # Custom format string
+    datefmt='%d-%m-%Y %H-%M-%S' # Custom date/time format
+)
+
+JobStatus = JobStatus # Make JobStatus directly accessible within the app for tasks to import via `from app import JobStatus`
+
 # --- Flask App Setup ---
 app = Flask(__name__)
+
+# *** REVERSE PROXY FIX ***
+# Apply ProxyFix middleware to make the app aware of the reverse proxy.
+# This is crucial for path-based routing (e.g., domain.com/audiomuse).
+# It tells Flask to trust the X-Forwarded-Proto, X-Forwarded-Host,
+# X-Forwarded-For, and X-Forwarded-Prefix headers sent by proxies like Traefik or Nginx.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+# *** END OF FIX ***
 
 # Log the application version on startup
 app.logger.info(f"Starting AudioMuse-AI Backend version {APP_VERSION}")
@@ -230,61 +240,68 @@ with app.app_context():
     init_db()
 
 # --- DB Cleanup Utility ---
-def clean_successful_task_details_on_new_start():
+def clean_up_previous_main_tasks():
     """
-    Cleans the 'details' field (specifically 'log' and 'log_storage_info')
-    for all tasks in the database that are marked as SUCCESS.
-    This is typically called when a new main task starts.
-    This function will now change the status of these tasks to REVOKED
-    and update their details to a minimal archival message.
+    Cleans up all previous main tasks before a new one starts.
+    - Archives tasks in SUCCESS state.
+    - Archives stale tasks stuck in PENDING, STARTED, or PROGRESS states.
+    A main task is identified by having a NULL parent_task_id.
     """
     db = get_db()
     cur = db.cursor(cursor_factory=DictCursor)
-    app.logger.info("Starting archival of previously successful tasks (setting status to REVOKED and pruning details).")
+    app.logger.info("Starting cleanup of all previous main tasks.")
+    
+    non_terminal_statuses = (TASK_STATUS_PENDING, TASK_STATUS_STARTED, TASK_STATUS_PROGRESS, TASK_STATUS_SUCCESS)
+    
     try:
-        # Select tasks that are currently marked as SUCCESS
-        cur.execute("SELECT task_id, details FROM task_status WHERE status = %s", (TASK_STATUS_SUCCESS,))
+        cur.execute("SELECT task_id, status, details, task_type FROM task_status WHERE status IN %s AND parent_task_id IS NULL", (non_terminal_statuses,))
         tasks_to_archive = cur.fetchall()
 
         archived_count = 0
         for task_row in tasks_to_archive:
             task_id = task_row['task_id']
+            original_status = task_row['status']
+            
             original_details_json = task_row['details']
-            original_status_message = "Task completed successfully." # Default
+            original_status_message = f"Task was in '{original_status}' state."
 
             if original_details_json:
                 try:
                     original_details_dict = json.loads(original_details_json)
                     original_status_message = original_details_dict.get("status_message", original_status_message)
-                except json.JSONDecodeError:
-                    app.logger.warning(f"Could not parse original details JSON for task {task_id} during archival. Using default status message.")
+                except (json.JSONDecodeError, TypeError):
+                     app.logger.warning(f"Could not parse original details for task {task_id} during archival.")
 
-            # New minimal details for the archived task
+            if original_status == TASK_STATUS_SUCCESS:
+                archival_reason = "New main task started, old successful task archived."
+            else:
+                archival_reason = f"New main task started, stale task (status: {original_status}) has been archived."
+
             archived_details = {
-                "log": [f"[Archived] Task was previously successful. Original summary: {original_status_message}"],
-                "original_status_before_archival": TASK_STATUS_SUCCESS, # Keep a record of its original success
-                "archival_reason": "New main task started, old successful task archived."
+                "log": [f"[Archived] {archival_reason}. Original summary: {original_status_message}"],
+                "original_status_before_archival": original_status,
+                "archival_reason": archival_reason
             }
             archived_details_json = json.dumps(archived_details)
 
-            # Update status to REVOKED, set new minimal details, progress to 100, and update timestamp
             with db.cursor() as update_cur:
                 update_cur.execute(
                     "UPDATE task_status SET status = %s, details = %s, progress = 100, timestamp = NOW() WHERE task_id = %s AND status = %s",
-                    (TASK_STATUS_REVOKED, archived_details_json, task_id, TASK_STATUS_SUCCESS) # Ensure we only update tasks that are still SUCCESS
+                    (TASK_STATUS_REVOKED, archived_details_json, task_id, original_status)
                 )
             archived_count += 1
 
         if archived_count > 0:
             db.commit()
-            app.logger.info(f"Archived (set to REVOKED and pruned details for) {archived_count} previously successful tasks.")
+            app.logger.info(f"Archived {archived_count} previous main tasks.")
         else:
-            app.logger.info("No previously successful tasks found to archive.")
+            app.logger.info("No previous main tasks found to clean up.")
     except Exception as e_main_clean:
-        db.rollback() # Rollback in case of error during the main query or commit
-        app.logger.error(f"Error during the task archival process: {e_main_clean}")
+        db.rollback()
+        app.logger.error(f"Error during the main task cleanup process: {e_main_clean}")
     finally:
         cur.close()
+
 
 # --- DB Utility Functions (used by tasks.py and API) ---
 def save_task_status(task_id, task_type, status=TASK_STATUS_PENDING, parent_task_id=None, sub_type_identifier=None, progress=0, details=None):
@@ -379,8 +396,8 @@ def get_child_tasks_from_db(parent_task_id):
     """Fetches all child tasks for a given parent_task_id from the database."""
     conn = get_db()
     cur = conn.cursor(cursor_factory=DictCursor)
-    # Select the task_id which is the job_id, and other necessary fields
-    cur.execute("SELECT task_id, status, sub_type_identifier FROM task_status WHERE parent_task_id = %s", (parent_task_id,))
+    # MODIFIED: Select the 'details' column as well for the final check.
+    cur.execute("SELECT task_id, status, sub_type_identifier, details FROM task_status WHERE parent_task_id = %s", (parent_task_id,))
     tasks = cur.fetchall()
     cur.close()
     # DictCursor returns a list of dictionary-like objects, convert to plain dicts
@@ -411,12 +428,21 @@ def track_exists(item_id):
     cur.close()
     return row is not None
 
-def save_track_analysis(item_id, title, author, tempo, key, scale, moods, energy=None, other_features=None): # Added energy and other_features
+def save_track_analysis_and_embedding(item_id, title, author, tempo, key, scale, moods, embedding_vector, energy=None, other_features=None):
+    """Saves track analysis and embedding in a single transaction."""
+    # Sanitize string inputs to remove NUL characters
+    title = title.replace('\x00', '') if title else title
+    author = author.replace('\x00', '') if author else author
+    key = key.replace('\x00', '') if key else key
+    scale = scale.replace('\x00', '') if scale else scale
+    other_features = other_features.replace('\x00', '') if other_features else other_features
+
     mood_str = ','.join(f"{k}:{v:.3f}" for k, v in moods.items())
+    
     conn = get_db()
     cur = conn.cursor()
     try:
-        # Use ON CONFLICT DO UPDATE to ensure existing records are updated
+        # Save analysis to score table
         cur.execute("""
             INSERT INTO score (item_id, title, author, tempo, key, scale, mood_vector, energy, other_features)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -430,31 +456,20 @@ def save_track_analysis(item_id, title, author, tempo, key, scale, moods, energy
                 energy = EXCLUDED.energy,
                 other_features = EXCLUDED.other_features
         """, (item_id, title, author, tempo, key, scale, mood_str, energy, other_features))
+
+        # Save embedding
+        if isinstance(embedding_vector, np.ndarray) and embedding_vector.size > 0:
+            embedding_blob = embedding_vector.astype(np.float32).tobytes()
+            cur.execute("""
+                INSERT INTO embedding (item_id, embedding) VALUES (%s, %s)
+                ON CONFLICT (item_id) DO UPDATE SET embedding = EXCLUDED.embedding
+            """, (item_id, psycopg2.Binary(embedding_blob)))
+
         conn.commit()
     except Exception as e:
         conn.rollback()
-        logger.error("Error saving track analysis for %s: %s", item_id, e)
-    finally:
-        cur.close()
-
-def save_track_embedding(item_id, embedding_vector):
-    """Saves or updates the embedding vector for a track as an efficient binary blob."""
-    if not isinstance(embedding_vector, np.ndarray) or embedding_vector.size == 0:
-        logger.warning("Embedding vector for %s is None. Skipping save.", item_id)
-        return
-
-    conn = get_db()
-    cur = conn.cursor()
-    try:
-        # Convert numpy array to a binary blob of float32 values
-        embedding_blob = embedding_vector.astype(np.float32).tobytes()
-        cur.execute("""
-            INSERT INTO embedding (item_id, embedding) VALUES (%s, %s)
-            ON CONFLICT (item_id) DO UPDATE SET embedding = EXCLUDED.embedding
-        """, (item_id, psycopg2.Binary(embedding_blob)))
-        conn.commit()
-    except Exception as e:
-        logger.error("Error saving track embedding for %s: %s", item_id, e)
+        logger.error("Error saving track analysis and embedding for %s: %s", item_id, e)
+        raise
     finally:
         cur.close()
 
@@ -567,6 +582,7 @@ def index():
               type: string
     """
     return render_template('index.html')
+
 
 @app.route('/api/status/<task_id>', methods=['GET'])
 def get_task_status_endpoint(task_id):
@@ -685,88 +701,64 @@ def get_task_status_endpoint(task_id):
 
     return jsonify(response)
 
-def cancel_job_and_children_recursive(job_id, task_type_from_db=None):
+def cancel_job_and_children_recursive(job_id, task_type_from_db=None, reason="Task cancellation processed by API."):
     """Helper to cancel a job and its children based on DB records."""
     cancelled_count = 0
 
-    # First, determine the task_type for the current job_id # type: ignore
+    # First, determine the task_type for the current job_id
     db_task_info = get_task_info_from_db(job_id)
     current_task_type = db_task_info.get('task_type') if db_task_info else task_type_from_db
 
     if not current_task_type:
-        print(f"Warning: Could not determine task_type for job {job_id}. Cannot reliably mark as REVOKED in DB or cancel children.")
-        # Try a best-effort RQ cancel if job_id is known, but DB update for this job is skipped.
+        logger.warning(f"Could not determine task_type for job {job_id}. Cannot reliably mark as REVOKED in DB or cancel children.")
         try:
-            job_rq = Job.fetch(job_id, connection=redis_conn)
-            if not job_rq.is_finished and not job_rq.is_failed and not job_rq.is_canceled:
-                send_stop_job_command(redis_conn, job_id)
-                cancelled_count += 1 # Count this as an action taken
-                print(f"Job {job_id} (task_type unknown) stop command sent to RQ.")
-            # else: Job already in a final state or not running
+            Job.fetch(job_id, connection=redis_conn)
+            send_stop_job_command(redis_conn, job_id)
+            cancelled_count += 1
+            logger.info(f"Job {job_id} (task_type unknown) stop command sent to RQ.")
         except NoSuchJobError:
-            pass # Job not in RQ, nothing to do there for this ID
+            pass
         return cancelled_count
 
-    # If current_task_type is known, proceed with RQ cancellation attempt
+    # Mark as REVOKED in DB for the current job. This is the primary action.
+    save_task_status(job_id, current_task_type, TASK_STATUS_REVOKED, progress=100, details={"message": reason})
+
+    # Attempt to stop the job in RQ. This is a secondary action to interrupt a running process.
     action_taken_in_rq = False
     try:
-        job_rq = Job.fetch(job_id, connection=redis_conn) # type: ignore
+        job_rq = Job.fetch(job_id, connection=redis_conn)
         current_rq_status = job_rq.get_status()
-        logger.info("Job %s (type: %s) found in RQ with status: %s", job_id, current_task_type, current_rq_status)
+        logger.info(f"Job {job_id} (type: {current_task_type}) found in RQ with status: {current_rq_status}")
 
-        if job_rq.is_started:
-            logger.info("  Job %s is STARTED. Attempting to send stop command.", job_id)
-            try:
-                send_stop_job_command(redis_conn, job_id) # This will likely move it to 'failed' in RQ
-                action_taken_in_rq = True
-                logger.info("    Stop command sent for job %s.", job_id)
-            except InvalidJobOperation:
-                logger.warning("    Job %s was in 'started' state but became non-executable for stop command (InvalidJobOperation). Will mark as REVOKED in DB.", job_id)
-            except Exception as e_stop_cmd: # Catch other potential errors from send_stop_job_command
-                logger.error("    Error sending stop command for job %s: %s", job_id, e_stop_cmd)
-        elif not (job_rq.is_finished or job_rq.is_failed or job_rq.is_canceled):
-            # If it's not started, and not in a terminal state (e.g., queued, deferred)
-            logger.info("  Job %s is %s. Attempting to cancel via job.cancel().", job_id, current_rq_status)
-            job_rq.cancel() # This moves it to 'canceled' status in RQ
+        if not job_rq.is_finished and not job_rq.is_failed and not job_rq.is_canceled:
+            if job_rq.is_started:
+                send_stop_job_command(redis_conn, job_id)
+            else:
+                job_rq.cancel()
             action_taken_in_rq = True
+            logger.info(f"  Sent stop/cancel command for job {job_id} in RQ.")
         else:
-            logger.info("  Job %s is already in a terminal RQ state: %s. No RQ action needed.", job_id, current_rq_status)
+            logger.info(f"  Job {job_id} is already in a terminal RQ state: {current_rq_status}.")
 
     except NoSuchJobError:
-        logger.warning("Job %s (type: %s) not found in RQ. Will mark as REVOKED in DB.", job_id, current_task_type)
+        logger.warning(f"Job {job_id} (type: {current_task_type}) not found in RQ, but marked as REVOKED in DB.")
     except Exception as e_rq_interaction:
-        logger.error("Error interacting with RQ for job %s (type: %s): %s", job_id, current_task_type, e_rq_interaction)
+        logger.error(f"Error interacting with RQ for job {job_id}: {e_rq_interaction}")
 
     if action_taken_in_rq:
         cancelled_count += 1
 
-    # Always mark as REVOKED in DB for the current job if its task_type is known
-    save_task_status(job_id, current_task_type, TASK_STATUS_REVOKED, progress=100, details={"message": "Task cancellation processed by API."})
-
-    # Attempt to cancel children based on DB parent_task_id
-    db = get_db()
-    cur = db.cursor(cursor_factory=DictCursor)
-
-    # Define terminal statuses for the query
-    terminal_statuses_tuple = (TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED,
-                               JobStatus.FINISHED, JobStatus.FAILED, JobStatus.CANCELED) # JobStatus for completeness if used directly
-
-    # Fetch children that are not already in a terminal state
-    cur.execute("""
-        SELECT task_id, task_type FROM task_status
-        WHERE parent_task_id = %s
-        AND status NOT IN %s
-    """, (job_id, terminal_statuses_tuple))
-    children_tasks = cur.fetchall()
-    cur.close()
+    # Recursively cancel children found in the database
+    children_tasks = get_child_tasks_from_db(job_id)
     
-    for child_task_row in children_tasks:
-        child_job_id = child_task_row['task_id']
-        child_task_type = child_task_row['task_type'] # Child's own type
-        logger.info("Recursively cancelling child job: %s of type %s", child_job_id, child_task_type)
-        # The count from recursive calls will be added
-        cancelled_count += cancel_job_and_children_recursive(child_job_id, child_task_type)
-
+    for child_task in children_tasks:
+        child_job_id = child_task['task_id']
+        # We only need to proceed if the child is not already in a terminal state
+        child_db_info = get_task_info_from_db(child_job_id)
+        if child_db_info and child_db_info.get('status') not in [TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED]:
+             logger.info(f"Recursively cancelling child job: {child_job_id}")
+             cancelled_count += cancel_job_and_children_recursive(child_job_id, reason="Cancelled due to parent task revocation.")
+        
     return cancelled_count
 
 @app.route('/api/cancel/<task_id>', methods=['POST'])
@@ -807,7 +799,10 @@ def cancel_task_endpoint(task_id):
     if not db_task_info:
         return jsonify({"message": f"Task {task_id} not found in database.", "task_id": task_id}), 404
 
-    cancelled_count = cancel_job_and_children_recursive(task_id, db_task_info.get('task_type')) # Task type from DB
+    if db_task_info.get('status') in [TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED]:
+        return jsonify({"message": f"Task {task_id} is already in a terminal state ({db_task_info.get('status')}) and cannot be cancelled.", "task_id": task_id}), 400
+
+    cancelled_count = cancel_job_and_children_recursive(task_id, reason=f"Cancellation requested for task {task_id} via API.")
 
     if cancelled_count > 0:
         return jsonify({"message": f"Task {task_id} and its children cancellation initiated. {cancelled_count} total jobs affected.", "task_id": task_id, "cancelled_jobs_count": cancelled_count}), 200
@@ -848,16 +843,15 @@ def cancel_all_tasks_by_type_endpoint(task_type_prefix):
     db = get_db()
     cur = db.cursor(cursor_factory=DictCursor)
     # Exclude terminal statuses
-    terminal_statuses = (TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED,
-                         JobStatus.FINISHED, JobStatus.FAILED, JobStatus.CANCELED) # JobStatus for completeness if used directly
+    terminal_statuses = (TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED)
     cur.execute("SELECT task_id, task_type FROM task_status WHERE task_type = %s AND status NOT IN %s", (task_type_prefix, terminal_statuses))
     tasks_to_cancel = cur.fetchall()
     cur.close()
 
     total_cancelled_jobs = 0
     cancelled_main_task_ids = []
-    for task_row in tasks_to_cancel:  # task_row has 'task_id' and 'task_type'
-        cancelled_jobs_for_this_main_task = cancel_job_and_children_recursive(task_row['task_id'], task_row['task_type'])  # Use task type from DB for consistency
+    for task_row in tasks_to_cancel:
+        cancelled_jobs_for_this_main_task = cancel_job_and_children_recursive(task_row['task_id'], reason=f"Bulk cancellation for task type '{task_type_prefix}' via API.")
         if cancelled_jobs_for_this_main_task > 0:
            total_cancelled_jobs += cancelled_jobs_for_this_main_task
            cancelled_main_task_ids.append(task_row['task_id'])
@@ -914,15 +908,14 @@ def get_active_tasks_endpoint():
     """
     db = get_db()
     cur = db.cursor(cursor_factory=DictCursor)
-    non_terminal_statuses = (TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED,
-                             JobStatus.FINISHED, JobStatus.FAILED, JobStatus.CANCELED)
+    non_terminal_statuses = (TASK_STATUS_PENDING, TASK_STATUS_STARTED, TASK_STATUS_PROGRESS)
     cur.execute("""
         SELECT task_id, parent_task_id, task_type, sub_type_identifier, status, progress, details, start_time, end_time
         FROM task_status
-        WHERE parent_task_id IS NULL AND status NOT IN ('SUCCESS', 'FAILURE', 'REVOKED', 'FINISHED', 'FAILED', 'CANCELED')
+        WHERE parent_task_id IS NULL AND status IN %s
         ORDER BY timestamp DESC
         LIMIT 1
-    """)
+    """, (non_terminal_statuses,))
     active_main_task_row = cur.fetchone()
     cur.close()
 
@@ -966,120 +959,8 @@ def get_active_tasks_endpoint():
 def get_config_endpoint():
     """
     Get the current server configuration values.
-    ---
-    tags:
-      - Configuration
-    responses:
-      200:
-        description: A JSON object containing various configuration parameters.
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                jellyfin_url:
-                  type: string
-                jellyfin_user_id:
-                  type: string
-                jellyfin_token:
-                  type: string
-                num_recent_albums:
-                  type: integer
-                max_distance:
-                  type: number
-                max_songs_per_cluster:
-                  type: integer
-                max_songs_per_artist:
-                  type: integer
-                top_n_playlists:
-                  type: integer
-                cluster_algorithm:
-                  type: string
-                num_clusters_min:
-                  type: integer
-                num_clusters_max:
-                  type: integer
-                dbscan_eps_min:
-                  type: number
-                dbscan_eps_max:
-                  type: number
-                dbscan_min_samples_min:
-                  type: integer
-                dbscan_min_samples_max:
-                  type: integer
-                gmm_n_components_min:
-                  type: integer
-                gmm_n_components_max:
-                  type: integer
-                spectral_n_clusters_min:
-                  type: integer
-                spectral_n_clusters_max:
-                  type: integer
-                pca_components_min:
-                  type: integer
-                pca_components_max:
-                  type: integer
-                min_songs_per_genre_for_stratification:
-                  type: integer
-                stratified_sampling_target_percentile:
-                  type: integer
-                top_n_moods:
-                  type: integer
-                mood_labels:
-                  type: array
-                  items:
-                    type: string
-                ai_model_provider:
-                  type: string
-                  description: Configured AI provider for playlist naming (OLLAMA, GEMINI, NONE).
-                ollama_server_url:
-                  type: string
-                  description: URL of the Ollama server for AI naming.
-                  nullable: true
-                ollama_model_name:
-                  type: string
-                  description: Name of the Ollama model to use for AI naming.
-                  nullable: true
-                gemini_api_key:
-                  type: string
-                  description: Configured Gemini API key (may be a default placeholder).
-                  nullable: true
-                gemini_model_name:
-                  type: string
-                  description: Configured Gemini model name.
-                  nullable: true
-                clustering_runs:
-                  type: integer
-                score_weight_diversity:
-                  type: number
-                  format: float
-                score_weight_silhouette:
-                  type: number
-                  format: float
-                score_weight_davies_bouldin:
-                  type: number
-                  format: float
-                score_weight_calinski_harabasz:
-                  type: number
-                  format: float
-                score_weight_purity:
-                  type: number
-                  format: float
-                score_weight_other_feature_diversity:
-                  type: number
-                  format: float
-                score_weight_other_feature_purity:
-                  type: number
-                  format: float
-                gmm_covariance_type:
-                  type: string
-                  description: Default GMM covariance type.
-                enable_clustering_embeddings:
-                  type: boolean
-                  description: Default state for using embeddings in clustering.
     """
     return jsonify({
-        "jellyfin_url": JELLYFIN_URL, "jellyfin_user_id": JELLYFIN_USER_ID, "jellyfin_token": JELLYFIN_TOKEN,
         "num_recent_albums": NUM_RECENT_ALBUMS, "max_distance": MAX_DISTANCE,
         "max_songs_per_cluster": MAX_SONGS_PER_CLUSTER, "max_songs_per_artist": MAX_SONGS_PER_ARTIST,
         "cluster_algorithm": CLUSTER_ALGORITHM, "num_clusters_min": NUM_CLUSTERS_MIN, "num_clusters_max": NUM_CLUSTERS_MAX,
@@ -1092,52 +973,24 @@ def get_config_endpoint():
         "stratified_sampling_target_percentile": STRATIFIED_SAMPLING_TARGET_PERCENTILE,
         "ai_model_provider": AI_MODEL_PROVIDER,
         "ollama_server_url": OLLAMA_SERVER_URL, "ollama_model_name": OLLAMA_MODEL_NAME,
-        "gemini_api_key": GEMINI_API_KEY, "gemini_model_name": GEMINI_MODEL_NAME,
+        "gemini_model_name": GEMINI_MODEL_NAME,
         "top_n_moods": TOP_N_MOODS, "mood_labels": MOOD_LABELS, "clustering_runs": CLUSTERING_RUNS,
         "top_n_playlists": TOP_N_PLAYLISTS,
-        "enable_clustering_embeddings": ENABLE_CLUSTERING_EMBEDDINGS, # Expose new flag
+        "enable_clustering_embeddings": ENABLE_CLUSTERING_EMBEDDINGS,
         "score_weight_diversity": SCORE_WEIGHT_DIVERSITY,
         "score_weight_silhouette": SCORE_WEIGHT_SILHOUETTE,
         "score_weight_davies_bouldin": SCORE_WEIGHT_DAVIES_BOULDIN,
         "score_weight_calinski_harabasz": SCORE_WEIGHT_CALINSKI_HARABASZ,
         "score_weight_purity": SCORE_WEIGHT_PURITY,
-        # *** NEW: Add new 'other_feature' weights to config response ***
         "score_weight_other_feature_diversity": SCORE_WEIGHT_OTHER_FEATURE_DIVERSITY,
-        "score_weight_other_feature_purity": SCORE_WEIGHT_OTHER_FEATURE_PURITY
+        "score_weight_other_feature_purity": SCORE_WEIGHT_OTHER_FEATURE_PURITY,
+        "path_distance_metric": PATH_DISTANCE_METRIC
     })
 
 @app.route('/api/playlists', methods=['GET'])
 def get_playlists_endpoint():
     """
     Get all generated playlists and their tracks from the database.
-    ---
-    tags:
-      - Playlists
-    responses:
-      200:
-        description: A dictionary of playlists.
-        content:
-          application/json:
-            schema:
-              type: object
-              description: "A dictionary where keys are playlist names and values are arrays of tracks. Playlist names are descriptive, based on dominant moods, tempo, and other features, and may be generated by AI. A suffix like '_automatic' is always added, and a number may be appended for large playlists that are split (e.g., 'Chill Vibes_automatic (2)')."
-              additionalProperties:
-                type: array
-                items:
-                  type: object
-                  properties:
-                    item_id:
-                      type: string
-                      description: The Jellyfin Item ID of the track.
-                    title:
-                      type: string
-                      description: The title of the track.
-                    author:
-                      type: string
-                      description: The artist of the track.
-                example:
-                  "Energetic_Fast_1": [{"item_id": "xyz", "title": "Song A", "author": "Artist X"}]
-
     """
     from collections import defaultdict # Local import if not used elsewhere globally
     conn = get_db()
@@ -1182,39 +1035,31 @@ def listen_for_index_reloads():
 
 
 # --- Import and Register Blueprints ---
-# NOTE: This is moved to the `if __name__ == '__main__'` block to prevent
-# circular imports when an RQ worker imports this module.
-# For production deployment with a WSGI server like Gunicorn,
-# this registration should be handled by an application factory pattern.
-# from app_chat import chat_bp
-# app.register_blueprint(chat_bp, url_prefix='/chat')
+# This is the original, working structure.
+from app_chat import chat_bp
+from app_clustering import clustering_bp
+from app_analysis import analysis_bp
+from app_voyager import voyager_bp
+from app_sonic_fingerprint import sonic_fingerprint_bp
+from app_path import path_bp
+from app_collection import collection_bp
+from app_external import external_bp # --- NEW: Import the external blueprint ---
+
+app.register_blueprint(chat_bp, url_prefix='/chat')
+app.register_blueprint(clustering_bp)
+app.register_blueprint(analysis_bp)
+app.register_blueprint(voyager_bp)
+app.register_blueprint(sonic_fingerprint_bp)
+app.register_blueprint(path_bp)
+app.register_blueprint(collection_bp)
+app.register_blueprint(external_bp, url_prefix='/external') # --- NEW: Register the external blueprint ---
 
 if __name__ == '__main__':
-    # --- Register Blueprints ---
-    # We register blueprints here to avoid circular imports for RQ workers.
-    from app_chat import chat_bp
-    from app_clustering import clustering_bp
-    from app_analysis import analysis_bp
-    from app_voyager import voyager_bp
-    from app_sonic_fingerprint import sonic_fingerprint_bp
-    from app_path import path_bp # Import the new path blueprint
-
-    # Register all blueprints
-    app.register_blueprint(chat_bp, url_prefix='/chat')
-    app.register_blueprint(clustering_bp)
-    app.register_blueprint(analysis_bp)
-    app.register_blueprint(voyager_bp)
-    app.register_blueprint(sonic_fingerprint_bp)
-    app.register_blueprint(path_bp) # Register the new path blueprint
-    
     os.makedirs(TEMP_DIR, exist_ok=True)
-    # This block runs only when the script is executed directly (e.g., `python app.py`)
-    # It's the entry point for the web server process.
+    
     with app.app_context():
         # --- Initial Voyager Index Load ---
-        # Import locally to avoid circular dependency issues.
         from tasks.voyager_manager import load_voyager_index_for_querying
-        # Load the Voyager index into memory on startup.
         load_voyager_index_for_querying()
 
     # --- Start Background Listener Thread ---

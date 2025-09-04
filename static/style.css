@@ -142,6 +142,7 @@ label {
 input[type="text"],
 input[type="number"],
 input[type="password"],
+input[type="email"],
 select,
 textarea {
     width: 100%;
@@ -159,6 +160,7 @@ textarea {
 input[type="text"]:focus,
 input[type="number"]:focus,
 input[type="password"]:focus,
+input[type="email"]:focus,
 select:focus,
 textarea:focus {
     outline: none;
@@ -191,6 +193,7 @@ textarea {
 
 .task-buttons button,
 #cancel-task-btn,
+#cancel-sync-btn,
 #playlistForm button,
 #similarity-form button,
 #playlist-form button,
@@ -211,6 +214,7 @@ textarea {
 #start-analysis-btn,
 #start-clustering-btn,
 #fetch-playlists-btn,
+#start-sync-btn,
 #playlistForm button,
 #similarity-form button {
     background-color: #2563EB;
@@ -219,6 +223,7 @@ textarea {
 #start-analysis-btn:hover,
 #start-clustering-btn:hover,
 #fetch-playlists-btn:hover,
+#start-sync-btn:hover,
 #playlistForm button:hover,
 #similarity-form button:hover {
     background-color: #1D4ED8;
@@ -234,20 +239,24 @@ textarea {
 }
 
 
-#cancel-task-btn {
+#cancel-task-btn,
+#cancel-sync-btn {
     background-color: #DC2626;
 }
-#cancel-task-btn:hover {
+#cancel-task-btn:hover,
+#cancel-sync-btn:hover {
     background-color: #B91C1C;
 }
 
 button:disabled,
-#cancel-task-btn:disabled {
+#cancel-task-btn:disabled,
+#cancel-sync-btn:disabled {
     background-color: #93C5FD !important;
     cursor: not-allowed !important;
     opacity: 1 !important;
 }
-#cancel-task-btn:disabled {
+#cancel-task-btn:disabled,
+#cancel-sync-btn:disabled {
     background-color: #FCA5A5 !important;
 }
 

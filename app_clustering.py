@@ -2,6 +2,7 @@
 from flask import Blueprint, jsonify, request
 import uuid
 import logging
+import traceback
 
 # Import all necessary configuration variables
 from config import JELLYFIN_URL, JELLYFIN_USER_ID, JELLYFIN_TOKEN, HEADERS, TEMP_DIR, \
@@ -18,17 +19,6 @@ from config import JELLYFIN_URL, JELLYFIN_USER_ID, JELLYFIN_TOKEN, HEADERS, TEMP
 
 # RQ import
 from rq import Retry
-# Import app-level components here to avoid circular imports at module level
-from app import (
-    rq_queue_high,
-    clean_successful_task_details_on_new_start,
-    save_task_status,
-    get_db,
-    TASK_STATUS_PENDING,
-    TASK_STATUS_SUCCESS,
-    TASK_STATUS_FAILURE,
-    TASK_STATUS_REVOKED
-)
 from psycopg2.extras import DictCursor
 
 
@@ -36,6 +26,26 @@ logger = logging.getLogger(__name__)
 
 # Create a Blueprint for clustering-related routes
 clustering_bp = Blueprint('clustering_bp', __name__)
+
+def clustering_task_failure_handler(job, connection, type, value, tb):
+    """A failure handler for the main clustering task, executed by the worker."""
+    from app import app, save_task_status, TASK_STATUS_FAILURE
+    with app.app_context():
+        task_id = job.get_id()
+        error_details = {
+            "message": "Clustering task failed permanently after all retries.",
+            "error_type": str(type.__name__),
+            "error_value": str(value),
+            "traceback": "".join(traceback.format_tb(tb))
+        }
+        save_task_status(
+            task_id,
+            "main_clustering",
+            TASK_STATUS_FAILURE,
+            progress=100,
+            details=error_details
+        )
+        app.logger.error(f"Main clustering task {task_id} failed permanently. DB status updated.")
 
 @clustering_bp.route('/api/clustering/start', methods=['POST'])
 def start_clustering_endpoint():
@@ -181,9 +191,8 @@ def start_clustering_endpoint():
                 default: "Defaults to server-configured OLLAMA_MODEL_NAME"
               gemini_api_key:
                 type: string
-                description: Override for the Gemini API key for this run.
+                description: Override for the Gemini API key for this run (optional, defaults to server configuration).
                 nullable: true
-                default: "Defaults to server-configured GEMINI_API_KEY"
               gemini_model_name:
                 type: string
                 description: Override for the Gemini model name for this run.
@@ -196,7 +205,7 @@ def start_clustering_endpoint():
               enable_clustering_embeddings:
                 type: boolean
                 description: Whether to use embeddings for clustering (True) or score_vector (False).
-                default: false
+                default: true
     responses:
       202:
         description: Clustering task successfully enqueued.
@@ -226,13 +235,27 @@ def start_clustering_endpoint():
                         status:
                             type: string
     """
+    # Local imports to prevent circular dependency at startup
+    from app import (
+        rq_queue_high,
+        clean_up_previous_main_tasks,
+        save_task_status,
+        get_db,
+        TASK_STATUS_PENDING,
+        TASK_STATUS_STARTED,
+        TASK_STATUS_PROGRESS,
+        TASK_STATUS_SUCCESS,
+        TASK_STATUS_FAILURE,
+        TASK_STATUS_REVOKED
+    )
+
     # Check for an existing active task to prevent parallel runs
     db = get_db()
     cur = db.cursor(cursor_factory=DictCursor)
-    non_terminal_statuses = (TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED)
+    non_terminal_statuses = (TASK_STATUS_PENDING, TASK_STATUS_STARTED, TASK_STATUS_PROGRESS)
     cur.execute("""
         SELECT task_id, status FROM task_status 
-        WHERE task_type = 'main_clustering' AND status NOT IN %s
+        WHERE task_type = 'main_clustering' AND status IN %s
     """, (non_terminal_statuses,))
     active_task = cur.fetchone()
     cur.close()
@@ -247,8 +270,8 @@ def start_clustering_endpoint():
     data = request.json
     job_id = str(uuid.uuid4())
 
-    # Clean up details of previously successful tasks before starting a new one
-    clean_successful_task_details_on_new_start()
+    # Clean up details of previously successful or stale tasks before starting a new one
+    clean_up_previous_main_tasks()
     save_task_status(job_id, "main_clustering", TASK_STATUS_PENDING, details={"message": "Task enqueued."})
 
     job = rq_queue_high.enqueue(
@@ -282,6 +305,7 @@ def start_clustering_endpoint():
             "ai_model_provider_param": data.get('ai_model_provider', AI_MODEL_PROVIDER).upper(),
             "ollama_server_url_param": data.get('ollama_server_url', OLLAMA_SERVER_URL),
             "ollama_model_name_param": data.get('ollama_model_name', OLLAMA_MODEL_NAME),
+            # This line already falls back to the config value if the request doesn't contain it.
             "gemini_api_key_param": data.get('gemini_api_key', GEMINI_API_KEY),
             "gemini_model_name_param": data.get('gemini_model_name', GEMINI_MODEL_NAME),
             "top_n_moods_for_clustering_param": int(data.get('top_n_moods', TOP_N_MOODS)),
@@ -290,6 +314,7 @@ def start_clustering_endpoint():
         job_id=job_id,
         description="Main Music Clustering",
         retry=Retry(max=3),
-        job_timeout=-1 # No timeout
+        job_timeout=-1, # No timeout
+        on_failure=clustering_task_failure_handler
     )
     return jsonify({"task_id": job.id, "task_type": "main_clustering", "status": job.get_status()}), 202

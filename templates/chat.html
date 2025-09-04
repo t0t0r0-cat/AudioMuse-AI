@@ -50,13 +50,10 @@
                                     <input type="text" id="ollamaServerUrl" placeholder="e.g., http://localhost:11434/api/generate">
                                 </div>
                             </div>
+                            <!-- REMOVED: The Gemini API Key input field is removed as it should not be sent from the frontend -->
                             <div id="geminiConfig" class="hidden">
                                 <label for="geminiModel">Gemini Model</label>
                                 <input type="text" id="geminiModel" placeholder="e.g., gemini-2.5-pro">
-                                <div style="margin-top: 1.5rem;">
-                                    <label for="geminiApiKey">Gemini API Key (for testing)</label>
-                                    <input type="password" id="geminiApiKey" placeholder="Enter Gemini API Key">
-                                </div>
                             </div>
                         </div>
                     </fieldset>
@@ -113,7 +110,6 @@
             const geminiConfigDiv = document.getElementById('geminiConfig');
             const ollamaModelSelect = document.getElementById('ollamaModel');
             const ollamaServerUrlInput = document.getElementById('ollamaServerUrl'); // Added Ollama Server URL input
-            const geminiApiKeyInput = document.getElementById('geminiApiKey'); // Added API key input
             const geminiModelSelect = document.getElementById('geminiModel');
             const playlistForm = document.getElementById('playlistForm');
             const userInput = document.getElementById('userInput');
@@ -157,9 +153,6 @@
                 ollamaServerUrlInput.value = globalConfig.ollama_server_url || "http://localhost:11434/api/generate"; // Pre-fill Ollama Server URL
                 
                 geminiModelSelect.value = globalConfig.default_gemini_model_name || "gemini-2.5-pro";
-                // Pre-fill Gemini API key from config if available and not the placeholder
-                // User can still override this in the form.
-                geminiApiKeyInput.value = globalConfig.default_gemini_api_key || "";
             }
 
             /**
@@ -205,7 +198,7 @@
                     payload.ollama_server_url = ollamaServerUrlInput.value; // Include Ollama Server URL
                 } else if (payload.ai_provider === 'GEMINI') {
                     payload.ai_model = geminiModelSelect.value;
-                    payload.gemini_api_key = geminiApiKeyInput.value; // Include API key for Gemini
+                    // REMOVED: The API key is no longer sent from the frontend
                 }
                 try {
                     const response = await fetch('/chat/api/chatPlaylist', {

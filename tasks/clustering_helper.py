@@ -18,9 +18,6 @@ from sklearn.neighbors import NearestNeighbors
 from rq.job import Job
 from rq.exceptions import NoSuchJobError
 
-# App and config imports
-from app import (app, get_db, get_task_info_from_db, get_tracks_by_ids,
-                 get_score_data_by_ids, TASK_STATUS_SUCCESS, JobStatus, redis_conn)
 from config import (STRATIFIED_GENRES, OTHER_FEATURE_LABELS, MOOD_LABELS, MAX_DISTANCE,
                     MAX_SONGS_PER_ARTIST, GMM_COVARIANCE_TYPE, SPECTRAL_N_NEIGHBORS,
                     TOP_K_MOODS_FOR_PURITY_CALCULATION, LN_MOOD_DIVERSITY_STATS,
@@ -46,6 +43,9 @@ def _perform_single_clustering_iteration(
     This function is now a high-level coordinator.
     """
     try:
+        # Local import to prevent circular dependency
+        from app import app
+
         if not item_ids_for_subset:
             logger.warning(f"{log_prefix} Iteration {run_idx}: Received empty item ID subset. Skipping.")
             return {"fitness_score": -1.0}
@@ -101,8 +101,11 @@ def _perform_single_clustering_iteration(
 
 def _prepare_iteration_data(item_ids, active_mood_labels, use_embeddings, log_prefix, run_idx):
     """Fetches track data, creates feature/embedding vectors, and ensures alignment."""
+    # Local import to prevent circular dependency
+    from app import get_tracks_by_ids, get_score_data_by_ids
+
     logger.info(f"{log_prefix} Iteration {run_idx}: Fetching data for {len(item_ids)} tracks. Use embeddings: {use_embeddings}")
-    rows = get_tracks_by_ids(item_ids) if use_embeddings else get_score_data_by_ids(item_ids)
+    rows = get_tracks_by_ids(item_ids) if use_embeddings else get_score_data_by_ids(item_ids) # These functions are now imported locally
     valid_tracks, X_feat_orig_list, X_embed_raw_list = [], [], []
     for row_data in (dict(r) for r in rows if r):
         try:
@@ -607,6 +610,9 @@ def _name_cluster(centroid_vector, pca_model, pca_enabled, mood_labels, scaler):
 
 def get_job_result_safely(job_id, parent_task_id, task_type="child task"):
     """Safely retrieves the result of an RQ job, checking both RQ and the database."""
+    # Local import to prevent circular dependency
+    from app import app, get_task_info_from_db, TASK_STATUS_SUCCESS, JobStatus, redis_conn
+
     try:
         job = Job.fetch(job_id, connection=redis_conn)
         if job.is_finished and isinstance(job.result, dict):

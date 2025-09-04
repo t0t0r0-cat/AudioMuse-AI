@@ -31,6 +31,7 @@ The **supported architecture** are:
 
 
 And now just some **NEWS:**
+> * Version 0.6.6-beta introduce the **Collection Sync EXPERIMENTAL** functionality. **ONLY** in this functionality, **ONLY** by readingand accepting the [Privacy Policy](https://github.com/NeptuneHub/AudioMuse-AI/blob/main/PRIVACY.md) and **ONLY** when you EXPLICITLY do a OAuth login with your github account, you can sync you library with a Centralized Database on cloud.
 > * Version 0.6.5-beta introduce the **Song Path** feature. Input two song and get a sonic path between them.
 > * Version 0.6.4-beta introdcue **Sonic Fingerprint** turn your listening history in a fingerprint to discover similar sonic songs.
 > * Version 0.6.3-beta introduce **Voyager index** for the similarity function. Raising the recall from 70-80% to 99% for 100 similar song. Also using less memory.
@@ -50,6 +51,7 @@ We are **not affiliated with, endorsed by, or sponsored by** the owners of `audi
 - [Playlist from Similar song (via similarity Interface)](#playlist-from-similar-song-via-similarity-interface)
 - [Sonic Fingerprint playlist (via sonic_fingerprint Interface)](#sonic-fingerprint-playlist-via-sonic_fingerprint-interface)
 - [Song Path playlist (via path Interface)](#song-path-playlist-via-path-interface)
+- [Collection Sync (via collection Interface)](#collection-sync-via-collection-interface)
 - [Kubernetes Deployment (K3S Example)](#kubernetes-deployment-k3s-example)
 - [Hardware Requirements](#hardware-requirements)
 - [Configuration Parameters](#configuration-parameters)
@@ -356,6 +358,26 @@ This new functionality create a sonic similar path between two song asked from t
 6.  **Review and Create:**
     *   Input a name for the playlist and ask the interface to create it directly on Jellyfin or Navidrome. That's it!
 
+## **Collection Sync (via collection Interface)**
+
+**IMPORTANT:** this function sync your datatabase in a centralized one on internet. You can decide IF and WHEN using this function by explicitly accepting the [Privacy Policy](https://github.com/NeptuneHub/AudioMuse-AI/blob/main/PRIVACY.md), doing an explicit login and explicitly run the functionality.
+
+**How to Use:**
+1.  **Access the Collection Interface:**
+    *   Navigate to `http://<EXTERNAL-IP>:8000/collection` (or `http://localhost:8000/collection` for local Docker Compose deployments).
+2.  **Accept the Security Policy and do the Oauth Login:**
+    *   To work you need first to read the Security Policy and check the checkbox, second to do an Oauth Login. Actually supported only with Github
+3.  **Select the number of last album to sync**
+    *   Like the offline analysis, you need to input how many last album you want to sync. If you put `0` it will sync all
+4.  **Start Syncronization**
+    *   The syncronization will sync Score and Embedding database online working on the last album order. Basically it pick an album and check: if **THE ANALYSIS DATA** are presents on your local database, it try to send online (to be shared with other user). If they are not present offline, it try to get from the online database.
+
+The actual use case is to retrive the analysis from the online database without the need of an analysis AND to contribute to the database itself with the song that you already analyzed
+
+**IMPORANT** this functionality only share analysis data **NOT** the song itself.
+
+The login is required mainly to avoid high traffic on the central database. If you don't like to share information on internet, just don't use it.
+
 ## **Kubernetes Deployment (K3S Example)**
 
 The Quick Start provided in the `playlist` namespace the following resources (the same explanetion have sense for both Navidrome and Jellyfin):
@@ -459,8 +481,12 @@ This are the default parameters on wich the analysis or clustering task will be 
 | `VOYAGER_QUERY_EF`                       | Number neighbor analyzed during the query.                                 | `1024`                                 |
 | `VOYAGER_METRIC`                           | Different tipe of distance metrics: `angular`, `euclidean`,`dot`         | `angular`              |
 | `SIMILARITY_ELIMINATE_DUPLICATES_DEFAULT` | It enable the possibility of use the `MAX_SONGS_PER_ARTIST` also in similar song  | `true`              |
-| **Sonic Fingerprint General**    |                                                                              |                                      |
-| `SONIC_FINGERPRINT_NEIGHBORS`             | Default number of track for the sonic fingerprint                            | `100`                      |
+| **Sonic Fingerprint General**    |                                                                                    |                                      |
+| `SONIC_FINGERPRINT_NEIGHBORS`             | Default number of track for the sonic fingerprint                         | `100`                      |
+| **Similar Song and Song Path Duplicate filtering General** |                                                          |                                      |
+| `DUPLICATE_DISTANCE_THRESHOLD_COSINE`     | Less than this cosine distance the track is a duplicate.                  | `0.01`                      |
+| `DUPLICATE_DISTANCE_THRESHOLD_EUCLIDEAN`  | Less than this euclidean distance the track is a duplicate.               | `0.15`                      |
+| `DUPLICATE_DISTANCE_CHECK_LOOKBACK`       | How many previous song need to be checked for duplicate.                  | `1`                      |
 | **Song Path General**    |                                                                              |                                      |
 | `PATH_DISTANCE_METRIC`                 | The distance metric to use for pathfinding. Options: 'angular', 'euclidean'| `euclidean`   |
 | `PATH_DEFAULT_LENGTH`                  | Default number of songs in the path if not specified in the API request     | `25`          |

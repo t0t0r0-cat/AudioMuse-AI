@@ -134,8 +134,10 @@ function renderConfig(config) {
     document.getElementById('config-score_weight_silhouette').value = config.score_weight_silhouette || 0;
     document.getElementById('config-score_weight_davies_bouldin').value = config.score_weight_davies_bouldin || 0;
     document.getElementById('config-score_weight_calinski_harabasz').value = config.score_weight_calinski_harabasz || 0;
+    // CORRECTED: Fixed variable names to match the Python config.
     document.getElementById('config-score_weight_other_feature_diversity').value = config.score_weight_other_feature_diversity || 0;
     document.getElementById('config-score_weight_other_feature_purity').value = config.score_weight_other_feature_purity || 0;
+    document.getElementById('config-enable_clustering_embeddings').checked = config.enable_clustering_embeddings;
 
     // Algorithm Specific
     document.getElementById('config-dbscan_eps_min').value = config.dbscan_eps_min || 0;
@@ -154,7 +156,6 @@ function renderConfig(config) {
     aiModelProviderSelect.value = config.ai_model_provider || 'NONE';
     document.getElementById('config-ollama_server_url').value = config.ollama_server_url || 'http://127.0.0.1:11434/api/generate';
     document.getElementById('config-ollama_model_name').value = config.ollama_model_name || 'mistral:7b';
-    document.getElementById('config-gemini_api_key').value = config.gemini_api_key || '';
     document.getElementById('config-gemini_model_name').value = config.gemini_model_name || 'gemini-2.5-pro';
 }
 
@@ -243,7 +244,7 @@ async function checkActiveTasks() {
                     const previousStateWasTerminal = previousDetails && previousDetails.state && terminalStates.includes(previousDetails.state.toUpperCase());
 
                     if (finalStatusIsTerminal && !previousStateWasTerminal) {
-                        let alertTitle = 'Task Update';
+                        let alertTitle = 'Task Finished';
                         let alertMessage = `Task ${finalStatusData.task_id} (${finalStatusData.task_type_from_db || 'Unknown Type'}) has ${upperFinalStatus.toLowerCase()}.`;
                         if (['SUCCESS', 'FINISHED'].includes(upperFinalStatus)) alertTitle = 'Task Completed';
                         else if (['FAILURE', 'FAILED'].includes(upperFinalStatus)) alertTitle = 'Task Failed';
@@ -364,6 +365,7 @@ async function startTask(taskType) {
             score_weight_silhouette: parseFloat(document.getElementById('config-score_weight_silhouette').value),
             score_weight_davies_bouldin: parseFloat(document.getElementById('config-score_weight_davies_bouldin').value),
             score_weight_calinski_harabasz: parseFloat(document.getElementById('config-score_weight_calinski_harabasz').value),
+            // CORRECTED: Fixed variable names to match the Python config.
             score_weight_other_feature_diversity: parseFloat(document.getElementById('config-score_weight_other_feature_diversity').value),
             score_weight_other_feature_purity: parseFloat(document.getElementById('config-score_weight_other_feature_purity').value),
             dbscan_eps_min: parseFloat(document.getElementById('config-dbscan_eps_min').value),
@@ -379,7 +381,6 @@ async function startTask(taskType) {
             ai_model_provider: aiModelProviderSelect.value,
             ollama_server_url: document.getElementById('config-ollama_server_url').value,
             ollama_model_name: document.getElementById('config-ollama_model_name').value,
-            gemini_api_key: document.getElementById('config-gemini_api_key').value,
             gemini_model_name: document.getElementById('config-gemini_model_name').value,
             enable_clustering_embeddings: document.getElementById('config-enable_clustering_embeddings').checked
         });

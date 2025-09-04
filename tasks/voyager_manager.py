@@ -11,7 +11,9 @@ import re
 
 from config import (
     EMBEDDING_DIMENSION, INDEX_NAME, VOYAGER_METRIC, VOYAGER_EF_CONSTRUCTION,
-    VOYAGER_M, VOYAGER_QUERY_EF, MAX_SONGS_PER_ARTIST
+    VOYAGER_M, VOYAGER_QUERY_EF, MAX_SONGS_PER_ARTIST,
+    DUPLICATE_DISTANCE_THRESHOLD_COSINE, DUPLICATE_DISTANCE_THRESHOLD_EUCLIDEAN,
+    DUPLICATE_DISTANCE_CHECK_LOOKBACK
 )
 
 # Import from other project modules
@@ -23,6 +25,27 @@ logger = logging.getLogger(__name__)
 voyager_index = None
 id_map = None # {voyager_int_id: item_id_str}
 reverse_id_map = None # {item_id_str: voyager_int_id}
+
+# --- NEW HELPER FUNCTIONS FOR DIRECT DISTANCE CALCULATION ---
+def _get_direct_euclidean_distance(v1, v2):
+    if v1 is not None and v2 is not None:
+        return np.linalg.norm(v1 - v2)
+    return float('inf')
+
+def _get_direct_angular_distance(v1, v2):
+    if v1 is not None and v2 is not None and np.linalg.norm(v1) > 0 and np.linalg.norm(v2) > 0:
+        v1_u = v1 / np.linalg.norm(v1)
+        v2_u = v2 / np.linalg.norm(v2)
+        cosine_similarity = np.clip(np.dot(v1_u, v2_u), -1.0, 1.0)
+        return np.arccos(cosine_similarity) / np.pi
+    return float('inf')
+
+def get_direct_distance(v1, v2):
+    """Calculates direct distance between two vectors based on the VOYAGER_METRIC."""
+    if VOYAGER_METRIC == 'angular':
+        return _get_direct_angular_distance(v1, v2)
+    else: # Default to euclidean
+        return _get_direct_euclidean_distance(v1, v2)
 
 
 def build_and_store_voyager_index(db_conn):
@@ -224,10 +247,64 @@ def _is_same_song(title1, artist1, title2, artist2):
     
     return norm_title1 == norm_title2 and norm_artist1 == norm_artist2
 
+def _filter_by_distance(song_results: list, db_conn):
+    """
+    Filters a list of songs to remove items that are too close in direct vector distance
+    to a lookback window of previously kept songs.
+    """
+    if DUPLICATE_DISTANCE_CHECK_LOOKBACK <= 0:
+        return song_results
+
+    if not song_results:
+        return []
+
+    item_ids = [s['item_id'] for s in song_results]
+    details_map = {}
+    with db_conn.cursor(cursor_factory=DictCursor) as cur:
+        cur.execute("SELECT item_id, title, author FROM score WHERE item_id = ANY(%s)", (item_ids,))
+        rows = cur.fetchall()
+        for row in rows:
+            details_map[row['item_id']] = {'title': row['title'], 'author': row['author']}
+
+    threshold = DUPLICATE_DISTANCE_THRESHOLD_COSINE if VOYAGER_METRIC == 'angular' else DUPLICATE_DISTANCE_THRESHOLD_EUCLIDEAN
+    metric_name = 'Angular' if VOYAGER_METRIC == 'angular' else 'Euclidean'
+    
+    filtered_songs = []
+    for current_song in song_results:
+        is_too_close = False
+        current_vector = get_vector_by_id(current_song['item_id'])
+        if current_vector is None:
+            continue # Skip if we can't get a vector
+
+        # Check against the last N songs in the filtered list
+        lookback_window = filtered_songs[-DUPLICATE_DISTANCE_CHECK_LOOKBACK:]
+        for recent_song in lookback_window:
+            recent_vector = get_vector_by_id(recent_song['item_id'])
+            if recent_vector is None:
+                continue
+
+            direct_dist = get_direct_distance(current_vector, recent_vector)
+            
+            if direct_dist < threshold:
+                current_details = details_map.get(current_song['item_id'], {'title': 'N/A', 'author': 'N/A'})
+                recent_details = details_map.get(recent_song['item_id'], {'title': 'N/A', 'author': 'N/A'})
+                logger.info(
+                    f"Filtering song (DISTANCE FILTER) with {metric_name} distance: '{current_details['title']}' by '{current_details['author']}' "
+                    f"due to direct distance of {direct_dist:.4f} from "
+                    f"'{recent_details['title']}' by '{recent_details['author']}' (Threshold: {threshold})."
+                )
+                is_too_close = True
+                break
+        
+        if not is_too_close:
+            filtered_songs.append(current_song)
+
+    return filtered_songs
+
+
 def _deduplicate_and_filter_neighbors(song_results: list, db_conn, original_song_details: dict):
     """
-    Filters a list of songs to remove duplicates based on exact title/artist match,
-    including the original song that seeded the search.
+    Filters a list of songs to remove duplicates based on exact title/artist match.
     """
     if not song_results:
         return []
@@ -256,7 +333,7 @@ def _deduplicate_and_filter_neighbors(song_results: list, db_conn, original_song
                 added_detail['title'], added_detail['author']
             ):
                 is_duplicate = True
-                logger.info(f"Found duplicate: '{current_details['title']}' by '{current_details['author']}'.")
+                logger.info(f"Found duplicate (NAME FILTER): '{current_details['title']}' by '{current_details['author']}' (Distance from source: {song['distance']:.4f}).")
                 break
         
         if not is_duplicate:
@@ -268,8 +345,6 @@ def _deduplicate_and_filter_neighbors(song_results: list, db_conn, original_song
 def find_nearest_neighbors_by_id(target_item_id: str, n: int = 10, eliminate_duplicates: bool = False):
     """
     Finds the N nearest neighbors for a given item_id using the globally cached Voyager index.
-    The results will NOT include the original item and will be deduplicated based on title/artist similarity.
-    If eliminate_duplicates is True, it will also limit the number of songs from a single artist.
     """
     if voyager_index is None or id_map is None or reverse_id_map is None:
         raise RuntimeError("Voyager index is not loaded in memory. It may be missing, empty, or the server failed to load it on startup.")
@@ -302,8 +377,6 @@ def find_nearest_neighbors_by_id(target_item_id: str, n: int = 10, eliminate_dup
         k_increase = max(5, int(n * 0.20))
         num_to_query = n + k_increase + 1
 
-    # --- START: Graceful handling for small collections ---
-    # 1. Proactively cap the number of neighbors to the total items in the index.
     original_num_to_query = num_to_query
     if num_to_query > len(voyager_index):
         logger.warning(
@@ -313,9 +386,8 @@ def find_nearest_neighbors_by_id(target_item_id: str, n: int = 10, eliminate_dup
         )
         num_to_query = len(voyager_index)
 
-    # 2. Query for neighbors, catching RecallError if not enough neighbors can be found.
     try:
-        if num_to_query <= 1: # Must be > 1 to find neighbors other than the query item itself
+        if num_to_query <= 1:
              logger.warning(f"Number of neighbors to query ({num_to_query}) is too small. Skipping query.")
              neighbor_voyager_ids, distances = [], []
         else:
@@ -327,16 +399,29 @@ def find_nearest_neighbors_by_id(target_item_id: str, n: int = 10, eliminate_dup
     except Exception as e:
         logger.error(f"An unexpected error occurred during Voyager query for item '{target_item_id}': {e}", exc_info=True)
         return []
-    # --- END: Graceful handling ---
 
     initial_results = []
-    # Create a list of results, excluding the original song itself.
     for voyager_id, dist in zip(neighbor_voyager_ids, distances):
         item_id = id_map.get(voyager_id)
         if item_id and item_id != target_item_id:
             initial_results.append({"item_id": item_id, "distance": float(dist)})
 
-    unique_results_by_song = _deduplicate_and_filter_neighbors(initial_results, db_conn, target_song_details)
+    # --- IMPLEMENTATION OF USER PROPOSAL ---
+    # 1. Create a representation of the original song to prepend to the list.
+    original_song_for_filtering = {"item_id": target_item_id, "distance": 0.0}
+    
+    # 2. Prepend the original song to the neighbor results.
+    results_with_original = [original_song_for_filtering] + initial_results
+    
+    # 3. Pass the combined list to the distance filter.
+    # The first song in the lookback window will now be the original song.
+    temp_filtered_results = _filter_by_distance(results_with_original, db_conn)
+    
+    # 4. Remove the original song from the filtered list before proceeding.
+    distance_filtered_results = [song for song in temp_filtered_results if song['item_id'] != target_item_id]
+    # --- END OF IMPLEMENTATION ---
+
+    unique_results_by_song = _deduplicate_and_filter_neighbors(distance_filtered_results, db_conn, target_song_details)
     
     if eliminate_duplicates:
         item_ids_to_check = [r['item_id'] for r in unique_results_by_song]
@@ -366,7 +451,6 @@ def find_nearest_neighbors_by_id(target_item_id: str, n: int = 10, eliminate_dup
 def find_nearest_neighbors_by_vector(query_vector: np.ndarray, n: int = 100, eliminate_duplicates: bool = False):
     """
     Finds the N nearest neighbors for a given query vector.
-    This is for 'on-the-fly' queries for vectors that are not in the index.
     """
     if voyager_index is None or id_map is None:
         raise RuntimeError("Voyager index is not loaded in memory.")
@@ -375,12 +459,10 @@ def find_nearest_neighbors_by_vector(query_vector: np.ndarray, n: int = 100, eli
     db_conn = get_db()
 
     if eliminate_duplicates:
-        num_to_query = n + int(n * 4) # Get a large pool for artist filtering
+        num_to_query = n + int(n * 4)
     else:
-        num_to_query = n + int(n * 0.2) # Smaller pool for just song-level deduplication
+        num_to_query = n + int(n * 0.2)
 
-    # --- START: Graceful handling for small collections ---
-    # 1. Proactively cap the number of neighbors to the total items in the index.
     original_num_to_query = num_to_query
     if num_to_query > len(voyager_index):
         logger.warning(
@@ -390,7 +472,6 @@ def find_nearest_neighbors_by_vector(query_vector: np.ndarray, n: int = 100, eli
         )
         num_to_query = len(voyager_index)
 
-    # 2. Query for neighbors, catching RecallError if not enough neighbors can be found.
     try:
         if num_to_query <= 0:
             logger.warning("Number of neighbors to query is zero or less. Skipping query.")
@@ -404,7 +485,6 @@ def find_nearest_neighbors_by_vector(query_vector: np.ndarray, n: int = 100, eli
     except Exception as e:
         logger.error(f"An unexpected error occurred during Voyager query for synthetic vector: {e}", exc_info=True)
         return []
-    # --- END: Graceful handling ---
 
     initial_results = [
         {"item_id": id_map.get(voyager_id), "distance": float(dist)}
@@ -412,7 +492,9 @@ def find_nearest_neighbors_by_vector(query_vector: np.ndarray, n: int = 100, eli
         if id_map.get(voyager_id) is not None
     ]
 
-    item_ids = [r['item_id'] for r in initial_results]
+    distance_filtered_results = _filter_by_distance(initial_results, db_conn)
+
+    item_ids = [r['item_id'] for r in distance_filtered_results]
     item_details = {}
     with db_conn.cursor(cursor_factory=DictCursor) as cur:
         cur.execute("SELECT item_id, title, author FROM score WHERE item_id = ANY(%s)", (item_ids,))
@@ -422,7 +504,7 @@ def find_nearest_neighbors_by_vector(query_vector: np.ndarray, n: int = 100, eli
             
     unique_songs_by_content = []
     added_songs_details = []
-    for song in initial_results:
+    for song in distance_filtered_results:
         current_details = item_details.get(song['item_id'])
         if not current_details:
             continue
@@ -453,7 +535,6 @@ def find_nearest_neighbors_by_vector(query_vector: np.ndarray, n: int = 100, eli
 def get_item_id_by_title_and_artist(title: str, artist: str):
     """
     Finds the item_id for an exact title and artist match.
-    Returns the item_id string or None if not found.
     """
     from app import get_db
     conn = get_db()
@@ -483,9 +564,7 @@ def search_tracks_by_title_and_artist(title_query: str, artist_query: str, limit
         query_parts = []
         params = []
         
-        # Handle combined artist and title search in one input
         if title_query and not artist_query:
-            # Search both title and artist fields with the same query
             query_parts.append("(title ILIKE %s OR author ILIKE %s)")
             params.extend([f"%{title_query}%", f"%{title_query}%"])
         else:
@@ -524,8 +603,7 @@ def search_tracks_by_title_and_artist(title_query: str, artist_query: str, limit
 
 def create_playlist_from_ids(playlist_name: str, track_ids: list, user_creds: dict = None):
     """
-    Creates a new playlist on the configured media server with the provided name and track IDs,
-    using the provided user credentials.
+    Creates a new playlist on the configured media server with the provided name and track IDs.
     """
     try:
         created_playlist = create_instant_playlist(playlist_name, track_ids, user_creds=user_creds)

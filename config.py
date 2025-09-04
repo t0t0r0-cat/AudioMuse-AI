@@ -21,7 +21,7 @@ NAVIDROME_PASSWORD = os.environ.get("NAVIDROME_PASSWORD", "your_navidrome_passwo
 
 
 # --- General Constants (Read from Environment Variables where applicable) ---
-APP_VERSION = "v0.6.5-beta" # Version updated for Sonic Fingerprint
+APP_VERSION = "v0.6.6-beta" # Version updated for Sonic Fingerprint
 MAX_DISTANCE = 0.5
 MAX_SONGS_PER_CLUSTER = 0
 MAX_SONGS_PER_ARTIST = int(os.getenv("MAX_SONGS_PER_ARTIST", "3")) # Max songs per artist in similarity results and clustering
@@ -33,7 +33,7 @@ TOP_N_PLAYLISTS = int(os.environ.get("TOP_N_PLAYLISTS", "8")) # *** NEW: Default
 # --- Algorithm Choose Constants (Read from Environment Variables) ---
 CLUSTER_ALGORITHM = os.environ.get("CLUSTER_ALGORITHM", "kmeans") # accepted dbscan, kmeans, gmm, or spectral
 AI_MODEL_PROVIDER = os.environ.get("AI_MODEL_PROVIDER", "NONE").upper() # Accepted: OLLAMA, GEMINI, NONE
-ENABLE_CLUSTERING_EMBEDDINGS = os.environ.get("ENABLE_CLUSTERING_EMBEDDINGS", "False").lower() == "true"
+ENABLE_CLUSTERING_EMBEDDINGS = os.environ.get("ENABLE_CLUSTERING_EMBEDDINGS", "True").lower() == "true"
 
 # --- DBSCAN Only Constants (Ranges for Evolutionary Approach) ---
 # Default ranges for DBSCAN parameters
@@ -65,7 +65,7 @@ SPECTRAL_N_NEIGHBORS = int(os.getenv("SPECTRAL_N_NEIGHBORS", "20"))
 # --- PCA Constants (Ranges for Evolutionary Approach) ---
 # Default ranges for PCA components
 PCA_COMPONENTS_MIN = int(os.getenv("PCA_COMPONENTS_MIN", "0")) # 0 to disable PCA
-PCA_COMPONENTS_MAX = int(os.getenv("PCA_COMPONENTS_MAX", "8")) # Max components for PCA 8 for score vectore, 199 for embeding
+PCA_COMPONENTS_MAX = int(os.getenv("PCA_COMPONENTS_MAX", "199")) # Max components for PCA 8 for score vectore, 199 for embeding
 
 # --- Clustering Runs for Diversity (New Constant) ---
 CLUSTERING_RUNS = int(os.environ.get("CLUSTERING_RUNS", "5000")) # Default to 100 runs for evolutionary search
@@ -160,7 +160,7 @@ OLLAMA_SERVER_URL = os.environ.get("OLLAMA_SERVER_URL", "http://192.168.3.15:114
 OLLAMA_MODEL_NAME = os.environ.get("OLLAMA_MODEL_NAME", "mistral:7b") # Ollama model to use
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "YOUR-GEMINI-API-KEY-HERE") # Default API key
-GEMINI_MODEL_NAME = os.environ.get("GEMINI_MODEL_NAME", "gemini-2.5-pro") # Default Gemini model gemini-2.5-pro
+GEMINI_MODEL_NAME = os.environ.get("GEMINI_MODEL_NAME", "gemini-2.5-pro") # Default Gemini model gemini-2.5-pro, alternative gemini-1.5-flash-latest
 REDIS_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
 
 # Construct DATABASE_URL from individual components for better security in K8s
@@ -193,14 +193,14 @@ EMBEDDING_DIMENSION = 200
 
 # --- Voyager Index Constants ---
 INDEX_NAME = os.environ.get("VOYAGER_INDEX_NAME", "music_library") # The primary key for our index in the DB
-VOYAGER_METRIC = os.environ.get("VOYAGER_METRIC", "euclidean") # Options: 'angular' (Cosine), 'euclidean', 'dot' (InnerProduct)
+VOYAGER_METRIC = os.environ.get("VOYAGER_METRIC", "angular") # Options: 'angular' (Cosine), 'euclidean', 'dot' (InnerProduct)
 VOYAGER_EF_CONSTRUCTION = int(os.environ.get("VOYAGER_EF_CONSTRUCTION", "1024"))
 VOYAGER_M = int(os.environ.get("VOYAGER_M", "64"))
 VOYAGER_QUERY_EF = int(os.environ.get("VOYAGER_QUERY_EF", "1024"))
 
 # --- Pathfinding Constants ---
 # The distance metric to use for pathfinding. Options: 'angular', 'euclidean'.
-PATH_DISTANCE_METRIC = os.environ.get("PATH_DISTANCE_METRIC", "euclidean").lower()
+PATH_DISTANCE_METRIC = os.environ.get("PATH_DISTANCE_METRIC", "angular").lower()
 # Default number of songs in the path if not specified in the API request.
 PATH_DEFAULT_LENGTH = int(os.environ.get("PATH_DEFAULT_LENGTH", "25"))
 # Number of random songs to sample for calculating the average jump distance.
@@ -252,3 +252,11 @@ STRATIFIED_SAMPLING_TARGET_PERCENTILE = int(os.getenv("STRATIFIED_SAMPLING_TARGE
 
 # Percentage of songs to change in the stratified sample between clustering runs (0.0 to 1.0)
 SAMPLING_PERCENTAGE_CHANGE_PER_RUN = float(os.getenv("SAMPLING_PERCENTAGE_CHANGE_PER_RUN", "0.2"))
+
+
+# --- NEW: Duplicate Detection by Distance ---
+# Threshold for considering songs as duplicates based on their distance in the vector space.
+# This helps catch identical songs with slightly different metadata (e.g., from different albums).
+DUPLICATE_DISTANCE_THRESHOLD_COSINE = float(os.getenv("DUPLICATE_DISTANCE_THRESHOLD_COSINE", "0.01"))
+DUPLICATE_DISTANCE_THRESHOLD_EUCLIDEAN = float(os.getenv("DUPLICATE_DISTANCE_THRESHOLD_EUCLIDEAN", "0.15"))
+DUPLICATE_DISTANCE_CHECK_LOOKBACK = int(os.getenv("DUPLICATE_DISTANCE_CHECK_LOOKBACK", "1"))
