@@ -60,13 +60,19 @@
                                 <label for="jellyfin_user_identifier">Jellyfin Username or User ID:</label>
                                 <input type="text" id="jellyfin_user_identifier" name="jellyfin_user_identifier" required placeholder="Enter Jellyfin Username or User ID">
                             </div>
-                            <!-- REMOVED: The Jellyfin API Token field is removed for security -->
+                            <div>
+                                <label for="jellyfin_token">API Token:</label>
+                                <input type="password" id="jellyfin_token" name="jellyfin_token" placeholder="Optional for default user, specify for other users">
+                            </div>
                             {% elif mediaserver_type == 'navidrome' %}
                             <div>
                                 <label for="navidrome_user">Navidrome Username:</label>
                                 <input type="text" id="navidrome_user" name="navidrome_user" required>
                             </div>
-                            <!-- REMOVED: The Navidrome Password field is removed for security -->
+                            <div>
+                                <label for="navidrome_password">Password/API Token:</label>
+                                <input type="password" id="navidrome_password" name="navidrome_password" placeholder="Optional for default user, specify for other user">
+                            </div>
                             {% endif %}
                         </div>
                     </fieldset>
@@ -126,7 +132,6 @@
             const resultsTableWrapper = document.getElementById('results-table-wrapper');
             const playlistStatusDiv = document.getElementById('playlist-status');
 
-            // --- Fetch and pre-populate default credentials on page load ---
             window.addEventListener('DOMContentLoaded', async () => {
                 try {
                     const response = await fetch('/api/config/defaults');
@@ -147,31 +152,29 @@
             fingerprintForm.addEventListener('submit', async function (event) {
                 event.preventDefault();
 
-                const n = parseInt(document.getElementById('n').value, 10);
-                const params = new URLSearchParams({ n: n });
-                
-                // --- FIX START ---
-                // Conditionally get user identifier based on the media server type
+                const payload = {
+                    n: parseInt(document.getElementById('n').value, 10)
+                };
+
                 if (mediaserverType === 'jellyfin') {
-                    const user_identifier = document.getElementById('jellyfin_user_identifier').value;
-                    if (!user_identifier) {
+                    payload.jellyfin_user_identifier = document.getElementById('jellyfin_user_identifier').value;
+                    payload.jellyfin_token = document.getElementById('jellyfin_token').value;
+                    if (!payload.jellyfin_user_identifier) {
                         statusDiv.textContent = 'Jellyfin User Identifier is required.';
                         statusDiv.className = 'status-error';
                         resultsContainer.classList.remove('hidden');
                         return;
                     }
-                    params.append('jellyfin_user_identifier', user_identifier);
                 } else if (mediaserverType === 'navidrome') {
-                    const user_identifier = document.getElementById('navidrome_user').value;
-                    if (!user_identifier) {
+                    payload.navidrome_user = document.getElementById('navidrome_user').value;
+                    payload.navidrome_password = document.getElementById('navidrome_password').value;
+                     if (!payload.navidrome_user) {
                         statusDiv.textContent = 'Navidrome Username is required.';
                         statusDiv.className = 'status-error';
                         resultsContainer.classList.remove('hidden');
                         return;
                     }
-                    params.append('navidrome_user', user_identifier);
                 }
-                // --- FIX END ---
 
                 resultsContainer.classList.remove('hidden');
                 playlistCreator.classList.add('hidden');
@@ -180,7 +183,11 @@
                 resultsTableWrapper.innerHTML = '';
 
                 try {
-                    const response = await fetch(`/api/sonic_fingerprint/generate?${params}`);
+                    const response = await fetch('/api/sonic_fingerprint/generate', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
                     const data = await response.json();
 
                     if (!response.ok) throw new Error(data.error || `HTTP error! status: ${response.status}`);
@@ -237,8 +244,10 @@
 
                 if (mediaserverType === 'jellyfin') {
                     payload.user_creds.user_identifier = document.getElementById('jellyfin_user_identifier').value;
+                    payload.user_creds.token = document.getElementById('jellyfin_token').value;
                 } else if (mediaserverType === 'navidrome') {
                     payload.user_creds.user = document.getElementById('navidrome_user').value;
+                    payload.user_creds.password = document.getElementById('navidrome_password').value;
                 }
 
                 playlistStatusDiv.textContent = 'Creating playlist...';
@@ -263,3 +272,4 @@
     <script src="/static/menu.js"></script>
 </body>
 </html>
+

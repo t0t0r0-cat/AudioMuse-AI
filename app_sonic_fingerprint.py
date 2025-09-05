@@ -62,10 +62,11 @@ def get_media_server_defaults():
     return jsonify({})
 
 
-@sonic_fingerprint_bp.route('/api/sonic_fingerprint/generate', methods=['GET'])
+@sonic_fingerprint_bp.route('/api/sonic_fingerprint/generate', methods=['GET', 'POST'])
 def generate_sonic_fingerprint_endpoint():
     """
     Generates a sonic fingerprint based on a user's listening habits.
+    Accepts both GET and POST requests for backward compatibility.
     ---
     tags:
       - Sonic Fingerprint
@@ -74,47 +75,55 @@ def generate_sonic_fingerprint_endpoint():
         in: query
         type: integer
         required: false
-        description: The number of results to return. Overrides the server default.
+        description: (For GET requests) The number of results to return.
       - name: jellyfin_user_identifier
         in: query
         type: string
-        required: true
-        description: The Jellyfin Username or User ID. Required if media server is Jellyfin.
+        required: false
+        description: (For GET requests) The Jellyfin Username or User ID.
       - name: jellyfin_token
         in: query
         type: string
         required: false
-        description: The Jellyfin API Token (optional, defaults to server configuration).
+        description: (For GET requests) The Jellyfin API Token.
       - name: navidrome_user
         in: query
         type: string
-        required: true
-        description: The Navidrome username. Required if media server is Navidrome.
+        required: false
+        description: (For GET requests) The Navidrome username.
       - name: navidrome_password
         in: query
         type: string
         required: false
-        description: The Navidrome password (optional, defaults to server configuration).
+        description: (For GET requests) The Navidrome password.
+    requestBody:
+      description: For POST requests, provide parameters in the JSON body.
+      required: false
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              n:
+                type: integer
+                description: The number of results to return.
+              jellyfin_user_identifier:
+                type: string
+                description: The Jellyfin Username or User ID.
+              jellyfin_token:
+                type: string
+                description: The Jellyfin API Token.
+              navidrome_user:
+                type: string
+                description: The Navidrome username.
+              navidrome_password:
+                type: string
+                description: The Navidrome password.
     responses:
       200:
         description: A list of recommended tracks based on the sonic fingerprint.
-        content:
-          application/json:
-            schema:
-              type: array
-              items:
-                type: object
-                properties:
-                  item_id:
-                    type: string
-                  title:
-                    type: string
-                  author:
-                    type: string
-                  distance:
-                    type: number
       400:
-        description: Bad Request - Missing necessary credentials for the configured media server.
+        description: Bad Request - Missing credentials or invalid payload.
       500:
         description: Server error during generation.
     """
@@ -122,21 +131,31 @@ def generate_sonic_fingerprint_endpoint():
     from app import get_score_data_by_ids
 
     try:
-        num_results = request.args.get('n', type=int)
+        if request.method == 'POST':
+            data = request.get_json()
+            if not data:
+                return jsonify({"error": "Invalid JSON payload"}), 400
+        else:  # GET request
+            data = request.args
+
+        num_results = data.get('n')
+        if num_results is not None:
+            try:
+                num_results = int(num_results)
+            except (ValueError, TypeError):
+                return jsonify({"error": "Parameter 'n' must be a valid integer."}), 400
         
         user_creds = {}
         if MEDIASERVER_TYPE == 'jellyfin':
-            user_identifier = request.args.get('jellyfin_user_identifier')
+            user_identifier = data.get('jellyfin_user_identifier')
             if not user_identifier:
                 return jsonify({"error": "Jellyfin User Identifier is required."}), 400
 
-            # MODIFIED: Get token from request args, if not provided, fall back to config
-            token = request.args.get('jellyfin_token') or JELLYFIN_TOKEN
+            token = data.get('jellyfin_token') or JELLYFIN_TOKEN
             
             if not token:
-                return jsonify({"error": "Jellyfin API Token is required. Please set it in the server configuration."}), 400
+                return jsonify({"error": "Jellyfin API Token is required. Please provide one or set it in the server configuration."}), 400
 
-            # --- Resolve username to User ID ---
             logger.info(f"Resolving Jellyfin user identifier: '{user_identifier}'")
             resolved_user_id = resolve_jellyfin_user(user_identifier, token)
             if not resolved_user_id:
@@ -147,11 +166,10 @@ def generate_sonic_fingerprint_endpoint():
             user_creds['token'] = token
 
         elif MEDIASERVER_TYPE == 'navidrome':
-            # MODIFIED: Get user and password from request args, but fall back to config
-            user_creds['user'] = request.args.get('navidrome_user') or NAVIDROME_USER
-            user_creds['password'] = request.args.get('navidrome_password') or NAVIDROME_PASSWORD
+            user_creds['user'] = data.get('navidrome_user') or NAVIDROME_USER
+            user_creds['password'] = data.get('navidrome_password') or NAVIDROME_PASSWORD
             if not user_creds['user'] or not user_creds['password']:
-                return jsonify({"error": "Navidrome username and password are required. Please set them in the server configuration."}), 400
+                return jsonify({"error": "Navidrome username and password are required. Please provide them or set them in the server configuration."}), 400
         
         fingerprint_results = generate_sonic_fingerprint(
             num_neighbors=num_results,
@@ -182,3 +200,4 @@ def generate_sonic_fingerprint_endpoint():
     except Exception as e:
         logger.error(f"Error in sonic_fingerprint endpoint: {e}", exc_info=True)
         return jsonify({"error": "An unexpected error occurred while generating the sonic fingerprint."}), 500
+
