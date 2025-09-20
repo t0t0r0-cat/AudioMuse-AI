@@ -271,6 +271,17 @@ def analyze_track(file_path, mood_labels_list, model_paths):
             return None, None
         
         transposed_patches = np.array(spec_patches).transpose(0, 2, 1)
+
+        # =================================================================
+        # === START: CORRECT FIX FOR DATA TYPE PRECISION ===
+        # The crash on specific CPUs is due to a float precision mismatch. The model
+        # expects float32, but the array can sometimes be float64. Explicitly casting
+        # to float32 is the correct, minimal fix that preserves all data and
+        # ensures compatibility.
+        final_patches = transposed_patches.astype(np.float32)
+        # === END: CORRECT FIX FOR DATA TYPE PRECISION ===
+        # =================================================================
+
     except Exception as e:
         logger.error(f"Spectrogram creation failed for {os.path.basename(file_path)}: {e}", exc_info=True)
         return None, None
@@ -286,7 +297,8 @@ def analyze_track(file_path, mood_labels_list, model_paths):
             tf.import_graph_def(graph_def, name="")
         
         with tf.Session(graph=embedding_graph) as sess:
-            embedding_feed_dict = {DEFINED_TENSOR_NAMES['embedding']['input']: transposed_patches}
+            # Use the corrected float32 patches
+            embedding_feed_dict = {DEFINED_TENSOR_NAMES['embedding']['input']: final_patches}
             embeddings_per_patch = run_inference(sess, embedding_feed_dict, DEFINED_TENSOR_NAMES['embedding']['output'])
 
         # Load and run prediction model
@@ -312,7 +324,8 @@ def analyze_track(file_path, mood_labels_list, model_paths):
                 mood_logits = mood_predictions_raw
             
             averaged_logits = np.mean(mood_logits, axis=0)
-            final_mood_predictions = averaged_logits
+            # Apply sigmoid to convert raw model outputs (logits) into probabilities
+            final_mood_predictions = sigmoid(averaged_logits)
 
             moods = {label: float(score) for label, score in zip(mood_labels_list, final_mood_predictions)}
 
