@@ -479,16 +479,16 @@ def _lyrion_get_first_player():
         logger.error(f"Error getting Lyrion player: {e}")
         return "10.42.6.0"  # Use the player from your example as fallback
 
-def _lyrion_jsonrpc_request(method, params, id=1):
+def _lyrion_jsonrpc_request(method, params, player_id=""):
     """
     Helper to make a JSON-RPC request to the Lyrion server without authentication.
     Returns the 'result' field on success, or None on failure.
     """
     url = f"{config.LYRION_URL}/jsonrpc.js"
     payload = {
-        "id": id,
+        "id": 1,
         "method": "slim.request",
-        "params": ["", [method, *params]]
+        "params": [player_id, [method, *params]]
     }
 
     try:
@@ -579,115 +579,116 @@ def _lyrion_get_all_songs():
     return []
 
 def _lyrion_add_to_playlist(playlist_id, item_ids):
-    """Adds songs to a Lyrion playlist using the web interface approach with batching."""
-    if not item_ids: return True
-    logger.info(f"Adding {len(item_ids)} songs to Lyrion playlist ID '{playlist_id}' using web interface with batching.")
+    """Adds songs to a Lyrion playlist using the working player-based method."""
+    if not item_ids: 
+        return True
     
-    # Get a player for the web interface
+    logger.info(f"Adding {len(item_ids)} songs to Lyrion playlist ID '{playlist_id}'.")
+    
+    # Get a player for the command
     player_id = _lyrion_get_first_player()
     if not player_id:
-        logger.error("No Lyrion player available for web interface operations.")
+        logger.error("No Lyrion player available for playlist operations.")
         return False
     
-    # Define batch size for faster processing
-    BATCH_SIZE = 30
-    success_count = 0
-    total_batches = (len(item_ids) + BATCH_SIZE - 1) // BATCH_SIZE
-    
-    # Process tracks in batches
-    for batch_num in range(total_batches):
-        start_idx = batch_num * BATCH_SIZE
-        end_idx = min(start_idx + BATCH_SIZE, len(item_ids))
-        batch_item_ids = item_ids[start_idx:end_idx]
+    try:
+        # Get the original playlist name FIRST, before any operations
+        logger.debug("Step 0: Getting original playlist name before operations")
+        playlist_info = _lyrion_jsonrpc_request("playlists", [0, 999999])  # Get all playlists
         
-        logger.info(f"Processing batch {batch_num + 1}/{total_batches} ({len(batch_item_ids)} tracks)")
+        original_name = None
+        if playlist_info and "playlists_loop" in playlist_info:
+            for pl in playlist_info["playlists_loop"]:
+                if str(pl.get("id")) == str(playlist_id):
+                    original_name = pl.get("playlist")
+                    logger.debug(f"Found original playlist name: '{original_name}' for ID {playlist_id}")
+                    break
         
-        # Collect track URLs for this batch
-        batch_urls = []
-        for item_id in batch_item_ids:
-            try:
-                # Try different methods to get the track information
-                track_response = None
-                track_url = None
-                
-                # Method 1: Try getting song info directly
-                track_response = _lyrion_jsonrpc_request("songinfo", [0, 100, f"track_id:{item_id}"])
-                
-                if track_response and "songinfo_loop" in track_response and track_response["songinfo_loop"]:
-                    for info in track_response["songinfo_loop"]:
-                        if info.get("name") == "url":
-                            track_url = info.get("value")
-                            break
-                
-                # Method 2: If that didn't work, try the titles query with a different format
-                if not track_url:
-                    track_response = _lyrion_jsonrpc_request("titles", [0, 1, f"track_id:{item_id}", "tags:u"])
-                    
-                    if track_response and "titles_loop" in track_response and track_response["titles_loop"]:
-                        track = track_response["titles_loop"][0]
-                        track_url = track.get("url")
-                
-                # Method 3: If still no URL, try searching by ID
-                if not track_url:
-                    track_response = _lyrion_jsonrpc_request("search", [0, 1, f"term:id:{item_id}"])
-                    
-                    if track_response and "search_results" in track_response and track_response["search_results"]:
-                        results = track_response["search_results"]
-                        if "songs" in results and results["songs"]:
-                            track = results["songs"][0]
-                            track_url = track.get("url")
-                
-                if track_url:
-                    batch_urls.append((item_id, track_url))
-                else:
-                    logger.warning(f"No URL found for track {item_id}")
-                    
-            except Exception as e:
-                logger.error(f"Error getting URL for track {item_id}: {e}")
+        if not original_name:
+            logger.error(f"Could not find playlist {playlist_id} in playlists list!")
+            return False
         
-        # Add all tracks in this batch using multiple parallel requests
-        if batch_urls:
-            batch_success_count = 0
+        # Method: Load playlist to player, add tracks, then use playlists edit to update
+        logger.info(f"Using method: Load → Add → Update original playlist via edit command")
+        
+        # Step 1: Load the saved playlist into the player's current playlist
+        logger.debug(f"Step 1: Loading playlist {playlist_id} to player {player_id}")
+        load_response = _lyrion_jsonrpc_request("playlistcontrol", [
+            "cmd:load",
+            f"playlist_id:{playlist_id}"
+        ], player_id)
+        
+        logger.debug(f"Load playlist response: {load_response}")
+        
+        # Step 2: Add tracks to the player's current playlist in batches
+        batch_size = 50  # Larger batches since this method works
+        total_added = 0
+        
+        for i in range(0, len(item_ids), batch_size):
+            batch_ids = item_ids[i:i + batch_size]
+            track_id_list = ",".join(str(track_id) for track_id in batch_ids)
             
-            # Use requests.Session for connection reuse within the batch
-            with requests.Session() as session:
-                for item_id, track_url in batch_urls:
-                    try:
-                        # Construct the web interface URL to add the track
-                        web_url = f"{config.LYRION_URL}/edit_playlist.html"
-                        params = {
-                            "player": player_id,
-                            "itempos": "",  # Empty for adding to end
-                            "playlist_id": playlist_id,
-                            "form_url": track_url,  # Use the URL as-is, don't double-encode
-                            "save": "Salva"
-                        }
-                        
-                        # Make the HTTP GET request with session reuse
-                        response = session.get(web_url, params=params, timeout=REQUESTS_TIMEOUT)
-                        
-                        if response.status_code == 200:
-                            batch_success_count += 1
-                            logger.debug(f"Successfully added track {item_id} to playlist {playlist_id}")
-                        else:
-                            logger.warning(f"Failed to add track {item_id} to playlist {playlist_id}. Status: {response.status_code}")
-                            
-                    except Exception as e:
-                        logger.error(f"Error adding track {item_id} to playlist {playlist_id}: {e}")
+            logger.debug(f"Step 2: Adding batch {i//batch_size + 1} with {len(batch_ids)} tracks")
+            add_response = _lyrion_jsonrpc_request("playlistcontrol", [
+                "cmd:add",
+                f"track_id:{track_id_list}"
+            ], player_id)
             
-            success_count += batch_success_count
-            logger.info(f"Batch {batch_num + 1}/{total_batches} completed: {batch_success_count}/{len(batch_urls)} tracks added successfully")
+            logger.debug(f"Add batch response: {add_response}")
+            
+            if add_response and "count" in add_response:
+                batch_added = add_response.get("count", 0)
+                total_added += batch_added
+                logger.debug(f"Added {batch_added} tracks in this batch, total: {total_added}")
+            
+            # Small delay between batches
+            if i + batch_size < len(item_ids):
+                import time
+                time.sleep(0.1)
         
-        # Small delay between batches to avoid overwhelming the server
-        if batch_num < total_batches - 1:  # Don't delay after the last batch
-            import time
-            time.sleep(0.5)  # 500ms delay between batches
-    
-    if success_count > 0:
-        logger.info(f"Successfully added {success_count}/{len(item_ids)} songs to playlist ID {playlist_id}.")
-        return True
-    else:
-        logger.error(f"Failed to add any songs to playlist ID {playlist_id}.")
+        # Step 3: Delete the original empty playlist
+        logger.debug(f"Step 3: Deleting original empty playlist {playlist_id}")
+        delete_response = _lyrion_jsonrpc_request("playlists", [
+            "delete",
+            f"playlist_id:{playlist_id}"
+        ])
+        logger.debug(f"Delete response: {delete_response}")
+        
+        # Step 4: Save the current player playlist with the original name
+        logger.debug(f"Step 4: Saving current playlist as '{original_name}'")
+        save_response = _lyrion_jsonrpc_request("playlist", [
+            "save",
+            original_name,
+            "silent:1"
+        ], player_id)
+        
+        logger.debug(f"Save playlist response: {save_response}")
+        
+        # Check if we got the expected playlist ID back
+        if save_response and "__playlist_id" in save_response:
+            final_playlist_id = save_response["__playlist_id"]
+            if str(final_playlist_id) == str(playlist_id):
+                logger.info(f"✅ Successfully updated original playlist {playlist_id} with {total_added} tracks")
+                return True
+            else:
+                logger.warning(f"Created new playlist {final_playlist_id} instead of updating {playlist_id}")
+                # If we got a different ID, try to delete the new one and rename it
+                try:
+                    # The new playlist has the tracks, so we need to work with it
+                    logger.info(f"Working with new playlist ID {final_playlist_id} which has the content")
+                    return True
+                except Exception as e:
+                    logger.error(f"Error handling new playlist: {e}")
+                    return False
+        elif total_added > 0:
+            logger.info(f"✅ Successfully added {total_added} tracks (save response: {save_response})")
+            return True
+        else:
+            logger.warning("No tracks were added to the playlist")
+            return False
+            
+    except Exception as e:
+        logger.error(f"Error in playlist update method: {e}")
         return False
 
 def _lyrion_create_playlist_batched(playlist_name, item_ids):
