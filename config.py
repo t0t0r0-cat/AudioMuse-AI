@@ -2,7 +2,7 @@
 import os
 
 # --- Media Server Type ---
-MEDIASERVER_TYPE = os.environ.get("MEDIASERVER_TYPE", "jellyfin").lower() # Possible values: jellyfin, navidrome
+MEDIASERVER_TYPE = os.environ.get("MEDIASERVER_TYPE", "jellyfin").lower() # Possible values: jellyfin, navidrome, lyrion
 
 # --- Jellyfin and DB Constants (Read from Environment Variables first) ---
 
@@ -18,6 +18,10 @@ HEADERS = {"X-Emby-Token": JELLYFIN_TOKEN}
 NAVIDROME_URL = os.environ.get("NAVIDROME_URL", "http://your_navidrome_url:4533")
 NAVIDROME_USER = os.environ.get("NAVIDROME_USER", "your_navidrome_user")
 NAVIDROME_PASSWORD = os.environ.get("NAVIDROME_PASSWORD", "your_navidrome_password") # Use the password directly
+
+# --- Lyrion (LMS) Constants ---
+# These are used only if MEDIASERVER_TYPE is "lyrion".
+LYRION_URL = os.environ.get("LYRION_URL", "http://your_lyrion_url:9000")
 
 
 # --- General Constants (Read from Environment Variables where applicable) ---

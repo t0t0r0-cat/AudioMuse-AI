@@ -438,10 +438,12 @@ def analyze_album_task(album_id, album_name, top_n_moods, parent_task_id):
             def get_existing_track_ids(track_ids):
                 if not track_ids: return set()
                 with get_db() as conn, conn.cursor() as cur:
-                    cur.execute("SELECT s.item_id FROM score s JOIN embedding e ON s.item_id = e.item_id WHERE s.item_id IN %s AND s.other_features IS NOT NULL AND s.energy IS NOT NULL AND s.mood_vector IS NOT NULL AND s.tempo IS NOT NULL", (tuple(track_ids),))
+                    # MODIFIED: Cast the integer track IDs to TEXT for the database query.
+                    track_ids_as_strings = [str(id) for id in track_ids]
+                    cur.execute("SELECT s.item_id FROM score s JOIN embedding e ON s.item_id = e.item_id WHERE s.item_id IN %s AND s.other_features IS NOT NULL AND s.energy IS NOT NULL AND s.mood_vector IS NOT NULL AND s.tempo IS NOT NULL", (tuple(track_ids_as_strings),))
                     return {row[0] for row in cur.fetchall()}
 
-            existing_track_ids_set = get_existing_track_ids( [t['Id'] for t in tracks])
+            existing_track_ids_set = get_existing_track_ids( [str(t['Id']) for t in tracks])
             total_tracks_in_album = len(tracks)
 
             for idx, item in enumerate(tracks, 1):
@@ -456,7 +458,7 @@ def analyze_album_task(album_id, album_name, top_n_moods, parent_task_id):
                 progress = 10 + int(85 * (idx / float(total_tracks_in_album)))
                 log_and_update_album_task(f"Analyzing track: {track_name_full} ({idx}/{total_tracks_in_album})", progress, current_track_name=track_name_full)
 
-                if item['Id'] in existing_track_ids_set:
+                if str(item['Id']) in existing_track_ids_set:
                     tracks_skipped_count += 1
                     continue
                 
@@ -560,7 +562,9 @@ def run_analysis_task(num_recent_albums, top_n_moods):
             def get_existing_track_ids(track_ids):
                 if not track_ids: return set()
                 with get_db() as conn, conn.cursor() as cur:
-                    cur.execute("SELECT s.item_id FROM score s JOIN embedding e ON s.item_id = e.item_id WHERE s.item_id IN %s AND s.other_features IS NOT NULL AND s.energy IS NOT NULL AND s.mood_vector IS NOT NULL AND s.tempo IS NOT NULL", (tuple(track_ids),))
+                    # Convert integer track IDs to strings for database comparison
+                    track_ids_as_strings = [str(track_id) for track_id in track_ids]
+                    cur.execute("SELECT s.item_id FROM score s JOIN embedding e ON s.item_id = e.item_id WHERE s.item_id IN %s AND s.other_features IS NOT NULL AND s.energy IS NOT NULL AND s.mood_vector IS NOT NULL AND s.tempo IS NOT NULL", (tuple(track_ids_as_strings),))
                     return {row[0] for row in cur.fetchall()}
 
             def monitor_and_clear_jobs():

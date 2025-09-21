@@ -457,6 +457,319 @@ def _navidrome_create_instant_playlist(playlist_name, item_ids, user_creds):
 
 
 # ##############################################################################
+# LYRION (JSON-RPC) IMPLEMENTATION
+# ##############################################################################
+# Lyrion uses a JSON-RPC API. This section contains functions to interact with it.
+
+def _lyrion_get_first_player():
+    """Gets the first available player from Lyrion for web interface operations."""
+    try:
+        response = _lyrion_jsonrpc_request("players", [0, 1])
+        if response and "players_loop" in response and response["players_loop"]:
+            player = response["players_loop"][0]
+            player_id = player.get("playerid")
+            if player_id:
+                logger.info(f"Found Lyrion player: {player_id}")
+                return player_id
+        
+        # Fallback: try to use a common default or return None
+        logger.warning("No Lyrion players found, using fallback player ID")
+        return "10.42.6.0"  # Use the player from your example as fallback
+    except Exception as e:
+        logger.error(f"Error getting Lyrion player: {e}")
+        return "10.42.6.0"  # Use the player from your example as fallback
+
+def _lyrion_jsonrpc_request(method, params, id=1):
+    """
+    Helper to make a JSON-RPC request to the Lyrion server without authentication.
+    Returns the 'result' field on success, or None on failure.
+    """
+    url = f"{config.LYRION_URL}/jsonrpc.js"
+    payload = {
+        "id": id,
+        "method": "slim.request",
+        "params": ["", [method, *params]]
+    }
+
+    try:
+        with requests.Session() as s:
+            s.headers.update({"Content-Type": "application/json"})
+            r = s.post(url, json=payload, timeout=REQUESTS_TIMEOUT)
+        r.raise_for_status()
+        response_data = r.json()
+        if response_data.get("error"):
+            logger.error(f"Lyrion JSON-RPC Error: {response_data['error'].get('message')}")
+            return None
+
+        # On success, return the result field. It might be None if not present.
+        # The caller must check for an explicit `None` return to detect failure.
+        return response_data.get("result")
+    except Exception as e:
+        logger.error(f"Failed to call Lyrion JSON-RPC API with method '{method}': {e}", exc_info=True)
+        return None
+
+def _lyrion_download_track(temp_dir, item):
+    """Downloads a single track from Lyrion using its URL."""
+    try:
+        track_id = item.get('Id')
+        if not track_id:
+            logger.error("Lyrion item does not have a track ID.")
+            return None
+            
+        # The correct, stable URL format for directly downloading a track from Lyrion/LMS by its ID.
+        # This avoids issues with the /stream endpoint which is often for the currently playing track.
+        download_url = f"{config.LYRION_URL}/music/{track_id}/download"
+        
+        # A more robust way to handle the file extension.
+        file_extension = item.get('Path', '.mp3')
+        if file_extension and '.' in file_extension:
+            file_extension = os.path.splitext(file_extension)[1]
+        else:
+            file_extension = '.mp3'
+        
+        local_filename = os.path.join(temp_dir, f"{track_id}{file_extension}")
+        
+        logger.info(f"Attempting to download from URL: {download_url}")
+        
+        # Use a new session for each download to avoid connection pooling issues.
+        with requests.Session() as s:
+            with s.get(download_url, stream=True, timeout=REQUESTS_TIMEOUT) as r:
+                r.raise_for_status()
+                with open(local_filename, 'wb') as f:
+                    for chunk in r.iter_content(chunk_size=8192):
+                        f.write(chunk)
+        logger.info(f"Downloaded '{item.get('title', 'Unknown')}' to '{local_filename}'")
+        return local_filename
+    except Exception as e:
+        logger.error(f"Failed to download Lyrion track {item.get('title', 'Unknown')}: {e}", exc_info=True)
+    return None
+
+def _lyrion_get_recent_albums(limit):
+    """Fetches recently added albums from Lyrion using JSON-RPC."""
+    logger.info(f"Attempting to fetch {limit} most recent albums from Lyrion via JSON-RPC.")
+    
+    # Handle fetching all albums if limit is 0
+    if limit == 0:
+        params = [0, 999999, "sort:new"]
+    else:
+        params = [0, limit, "sort:new"]
+        
+    try:
+        response = _lyrion_jsonrpc_request("albums", params)
+        logger.info(f"Lyrion API Raw Response: {response}")
+    except Exception as e:
+        logger.error(f"Lyrion API call for recent albums failed: {e}", exc_info=True)
+        return []
+
+    if response and "albums_loop" in response:
+        albums = response["albums_loop"]
+        # Lyrion API response keys are different, so we map them to our standard format.
+        return [{'Id': a.get('id'), 'Name': a.get('album')} for a in albums]
+    
+    logger.warning("Lyrion API response did not contain the 'albums_loop' key or was empty.")
+    return []
+
+def _lyrion_get_all_songs():
+    """Fetches all songs from Lyrion using JSON-RPC."""
+    response = _lyrion_jsonrpc_request("titles", [0, 999999])
+    if response and "titles_loop" in response:
+        songs = response["titles_loop"]
+        # Map Lyrion API keys to our standard format.
+        return [{'Id': s.get('id'), 'Name': s.get('title'), 'AlbumArtist': s.get('artist'), 'Path': s.get('url'), 'url': s.get('url')} for s in songs]
+    return []
+
+def _lyrion_add_to_playlist(playlist_id, item_ids):
+    """Adds songs to a Lyrion playlist using the web interface approach."""
+    if not item_ids: return True
+    logger.info(f"Adding {len(item_ids)} songs to Lyrion playlist ID '{playlist_id}' using web interface.")
+    
+    # Get a player for the web interface
+    player_id = _lyrion_get_first_player()
+    if not player_id:
+        logger.error("No Lyrion player available for web interface operations.")
+        return False
+    
+    success_count = 0
+    
+    # Get track information for each item_id to construct file URLs
+    for item_id in item_ids:
+        try:
+            # Try different methods to get the track information
+            track_response = None
+            track_url = None
+            
+            # Method 1: Try getting song info directly
+            track_response = _lyrion_jsonrpc_request("songinfo", [0, 100, f"track_id:{item_id}"])
+            
+            if track_response and "songinfo_loop" in track_response and track_response["songinfo_loop"]:
+                for info in track_response["songinfo_loop"]:
+                    if info.get("name") == "url":
+                        track_url = info.get("value")
+                        break
+            
+            # Method 2: If that didn't work, try the titles query with a different format
+            if not track_url:
+                track_response = _lyrion_jsonrpc_request("titles", [0, 1, f"track_id:{item_id}", "tags:u"])
+                
+                if track_response and "titles_loop" in track_response and track_response["titles_loop"]:
+                    track = track_response["titles_loop"][0]
+                    track_url = track.get("url")
+            
+            # Method 3: If still no URL, try searching by ID
+            if not track_url:
+                track_response = _lyrion_jsonrpc_request("search", [0, 1, f"term:id:{item_id}"])
+                
+                if track_response and "search_results" in track_response and track_response["search_results"]:
+                    results = track_response["search_results"]
+                    if "songs" in results and results["songs"]:
+                        track = results["songs"][0]
+                        track_url = track.get("url")
+            
+            # Log the response for debugging
+            logger.debug(f"Track {item_id} query response: {track_response}")
+                
+            if track_url:
+                # Use the track URL exactly as provided by Lyrion
+                # Lyrion already provides properly encoded URLs, so don't encode again
+                file_url = track_url
+                
+                logger.debug(f"Adding track to playlist with URL: {file_url}")
+                
+                # Construct the web interface URL to add the track
+                web_url = f"{config.LYRION_URL}/edit_playlist.html"
+                params = {
+                    "player": player_id,
+                    "itempos": "",  # Empty for adding to end
+                    "playlist_id": playlist_id,
+                    "form_url": file_url,  # Use the URL as-is, don't double-encode
+                    "save": "Salva"
+                }
+                
+                # Make the HTTP GET request
+                response = requests.get(web_url, params=params, timeout=REQUESTS_TIMEOUT)
+                
+                if response.status_code == 200:
+                    success_count += 1
+                    logger.debug(f"Successfully added track {item_id} to playlist {playlist_id}")
+                else:
+                    logger.warning(f"Failed to add track {item_id} to playlist {playlist_id}. Status: {response.status_code}")
+            else:
+                logger.warning(f"No URL found for track {item_id} after trying multiple query methods")
+                
+        except Exception as e:
+            logger.error(f"Error adding track {item_id} to playlist {playlist_id}: {e}")
+    
+    if success_count > 0:
+        logger.info(f"Successfully added {success_count}/{len(item_ids)} songs to playlist ID {playlist_id}.")
+        return True
+    else:
+        logger.error(f"Failed to add any songs to playlist ID {playlist_id}.")
+        return False
+
+def _lyrion_create_playlist_batched(playlist_name, item_ids):
+    """Creates a new Lyrion playlist and adds tracks using the web interface approach."""
+    logger.info(f"Attempting to create Lyrion playlist '{playlist_name}' with {len(item_ids)} songs using web interface method.")
+
+    try:
+        # Step 1: Create the playlist using JSON-RPC (this part works)
+        create_response = _lyrion_jsonrpc_request("playlists", ["new", f"name:{playlist_name}"])
+        
+        if create_response:
+            playlist_id = (
+                create_response.get("id") or
+                create_response.get("overwritten_playlist_id") or
+                create_response.get("playlist_id")
+            )
+            
+            if playlist_id:
+                logger.info(f"✅ Created Lyrion playlist '{playlist_name}' (ID: {playlist_id}).")
+                
+                # Step 2: Add tracks using the web interface method
+                if item_ids:
+                    if _lyrion_add_to_playlist(playlist_id, item_ids):
+                        logger.info(f"✅ Successfully added {len(item_ids)} tracks to playlist '{playlist_name}'.")
+                    else:
+                        logger.warning(f"Playlist '{playlist_name}' created but some tracks may not have been added.")
+                
+                return {"Id": playlist_id, "Name": playlist_name}
+        
+        logger.error(f"Failed to create Lyrion playlist '{playlist_name}'. Response: {create_response}")
+        return None
+        
+    except Exception as e:
+        logger.error(f"Exception creating Lyrion playlist '{playlist_name}': {e}", exc_info=True)
+        return None
+
+def _lyrion_create_playlist(base_name, item_ids):
+    """Creates a new playlist on Lyrion using admin credentials, with batching."""
+    _lyrion_create_playlist_batched(base_name, item_ids)
+
+def _lyrion_get_all_playlists():
+    """Fetches all playlists from Lyrion using JSON-RPC."""
+    response = _lyrion_jsonrpc_request("playlists", [0, 999999])
+    if response and "playlists_loop" in response:
+        playlists = response["playlists_loop"]
+        return [{'Id': p.get('id'), 'Name': p.get('playlist')} for p in playlists]
+    return []
+
+def _lyrion_delete_playlist(playlist_id):
+    """Deletes a playlist on Lyrion using JSON-RPC."""
+    # The correct command is 'playlists delete'.
+    response = _lyrion_jsonrpc_request("playlists", ["delete", f"playlist_id:{playlist_id}"])
+    if response:
+        logger.info(f"🗑️ Deleted Lyrion playlist ID: {playlist_id}")
+        return True
+    logger.error(f"Failed to delete playlist ID '{playlist_id}' on Lyrion")
+    return False
+
+# --- User-specific Lyrion functions ---
+def _lyrion_get_tracks_from_album(album_id):
+    """Fetches all audio tracks for an album from Lyrion using JSON-RPC."""
+    logger.info(f"Attempting to fetch tracks for album ID: {album_id}")
+    
+    # Lyrion's JSON-RPC doesn't have a direct "get tracks for album" call.
+    # The 'titles' command with a filter is the correct way to get songs for an album.
+    # We now fetch all songs and filter them by the album ID.
+    response = _lyrion_jsonrpc_request("titles", [0, 999999, f"album_id:{album_id}"])
+    logger.info(f"Lyrion API Raw Track Response for Album {album_id}: {response}")
+
+    if response and "titles_loop" in response:
+        songs = response["titles_loop"]
+        return [{'Id': s.get('id'), 'Name': s.get('title'), 'AlbumArtist': s.get('artist'), 'Path': s.get('url'), 'url': s.get('url')} for s in songs]
+    
+    logger.warning(f"Lyrion API response for tracks of album {album_id} did not contain the 'titles_loop' key or was empty.")
+    return []
+
+def _lyrion_get_playlist_by_name(playlist_name):
+    """Finds a Lyrion playlist by its exact name using JSON-RPC."""
+    # Fetch all playlists and filter by name, as direct name search is not standard.
+    all_playlists = _lyrion_get_all_playlists()
+    for p in all_playlists:
+        if p.get('Name') == playlist_name:
+            return p # Return the already formatted playlist dict
+    return None
+
+def _lyrion_get_top_played_songs(limit):
+    """Fetches the top N most played songs from Lyrion for a specific user using JSON-RPC."""
+    response = _lyrion_jsonrpc_request("titles", [0, limit, "sort:popular"])
+    if response and "titles_loop" in response:
+        songs = response["titles_loop"]
+        # Map Lyrion API keys to our standard format.
+        return [{'Id': s.get('id'), 'Name': s.get('title'), 'AlbumArtist': s.get('artist'), 'Path': s.get('url'), 'url': s.get('url')} for s in songs]
+    return []
+
+
+def _lyrion_get_last_played_time(item_id):
+    """Fetches the last played time for a track for a specific user. Not supported by Lyrion JSON-RPC API."""
+    logger.warning("Lyrion's JSON-RPC API does not provide a 'last played time' for individual tracks.")
+    return None
+
+def _lyrion_create_instant_playlist(playlist_name, item_ids):
+    """Creates a new instant playlist on Lyrion for a specific user, with batching."""
+    final_playlist_name = f"{playlist_name.strip()}_instant"
+    return _lyrion_create_playlist_batched(final_playlist_name, item_ids)
+
+# ##############################################################################
 # PUBLIC API (Dispatcher functions)
 # ##############################################################################
 
@@ -476,30 +789,38 @@ def delete_automatic_playlists():
         for p in _navidrome_get_all_playlists():
             if p.get('Name', '').endswith('_automatic') and _navidrome_delete_playlist(p.get('id')):
                 deleted_count += 1
+    elif config.MEDIASERVER_TYPE == 'lyrion':
+        for p in _lyrion_get_all_playlists():
+            if p.get('Name', '').endswith('_automatic') and _lyrion_delete_playlist(p.get('Id')):
+                deleted_count += 1
     logger.info(f"Finished deletion. Deleted {deleted_count} playlists.")
 
 def get_recent_albums(limit):
     """Fetches recently added albums using admin credentials."""
     if config.MEDIASERVER_TYPE == 'jellyfin': return _jellyfin_get_recent_albums(limit)
     if config.MEDIASERVER_TYPE == 'navidrome': return _navidrome_get_recent_albums(limit)
+    if config.MEDIASERVER_TYPE == 'lyrion': return _lyrion_get_recent_albums(limit)
     return []
 
 def get_tracks_from_album(album_id):
     """Fetches tracks for an album using admin credentials."""
     if config.MEDIASERVER_TYPE == 'jellyfin': return _jellyfin_get_tracks_from_album(album_id)
     if config.MEDIASERVER_TYPE == 'navidrome': return _navidrome_get_tracks_from_album(album_id)
+    if config.MEDIASERVER_TYPE == 'lyrion': return _lyrion_get_tracks_from_album(album_id)
     return []
 
 def download_track(temp_dir, item):
     """Downloads a track using admin credentials."""
     if config.MEDIASERVER_TYPE == 'jellyfin': return _jellyfin_download_track(temp_dir, item)
     if config.MEDIASERVER_TYPE == 'navidrome': return _navidrome_download_track(temp_dir, item)
+    if config.MEDIASERVER_TYPE == 'lyrion': return _lyrion_download_track(temp_dir, item)
     return None
 
 def get_all_songs():
     """Fetches all songs using admin credentials."""
     if config.MEDIASERVER_TYPE == 'jellyfin': return _jellyfin_get_all_songs()
     if config.MEDIASERVER_TYPE == 'navidrome': return _navidrome_get_all_songs()
+    if config.MEDIASERVER_TYPE == 'lyrion': return _lyrion_get_all_songs()
     return []
 
 def get_playlist_by_name(playlist_name):
@@ -507,6 +828,7 @@ def get_playlist_by_name(playlist_name):
     if not playlist_name: raise ValueError("Playlist name is required.")
     if config.MEDIASERVER_TYPE == 'jellyfin': return _jellyfin_get_playlist_by_name(playlist_name)
     if config.MEDIASERVER_TYPE == 'navidrome': return _navidrome_get_playlist_by_name(playlist_name)
+    if config.MEDIASERVER_TYPE == 'lyrion': return _lyrion_get_playlist_by_name(playlist_name)
     return None
 
 def create_playlist(base_name, item_ids):
@@ -515,6 +837,7 @@ def create_playlist(base_name, item_ids):
     if not item_ids: raise ValueError("Track IDs are required.")
     if config.MEDIASERVER_TYPE == 'jellyfin': _jellyfin_create_playlist(base_name, item_ids)
     elif config.MEDIASERVER_TYPE == 'navidrome': _navidrome_create_playlist(base_name, item_ids)
+    elif config.MEDIASERVER_TYPE == 'lyrion': _lyrion_create_playlist(base_name, item_ids)
 
 def create_instant_playlist(playlist_name, item_ids, user_creds=None):
     """Creates an instant playlist. Uses user_creds if provided, otherwise admin."""
@@ -533,6 +856,10 @@ def create_instant_playlist(playlist_name, item_ids, user_creds=None):
 
     if config.MEDIASERVER_TYPE == 'navidrome':
         return _navidrome_create_instant_playlist(playlist_name, item_ids, user_creds)
+    
+    if config.MEDIASERVER_TYPE == 'lyrion':
+        return _lyrion_create_instant_playlist(playlist_name, item_ids)
+
     return None
 
 def get_top_played_songs(limit, user_creds=None):
@@ -544,6 +871,8 @@ def get_top_played_songs(limit, user_creds=None):
         return _jellyfin_get_top_played_songs(limit, user_id, token)
     if config.MEDIASERVER_TYPE == 'navidrome':
         return _navidrome_get_top_played_songs(limit, user_creds)
+    if config.MEDIASERVER_TYPE == 'lyrion':
+        return _lyrion_get_top_played_songs(limit)
     return []
 
 def get_last_played_time(item_id, user_creds=None):
@@ -555,4 +884,6 @@ def get_last_played_time(item_id, user_creds=None):
         return _jellyfin_get_last_played_time(item_id, user_id, token)
     if config.MEDIASERVER_TYPE == 'navidrome':
         return _navidrome_get_last_played_time(item_id, user_creds)
+    if config.MEDIASERVER_TYPE == 'lyrion':
+        return _lyrion_get_last_played_time(item_id)
     return None
