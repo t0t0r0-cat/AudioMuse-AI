@@ -67,6 +67,10 @@
                                 <input type="text" id="navidrome_user" name="navidrome_user" required>
                             </div>
                             <!-- REMOVED: The Navidrome Password field is removed for security -->
+                            {% elif mediaserver_type == 'lyrion' %}
+                            <div>
+                                <p style="color: #059669; font-style: italic;">No credentials needed for Lyrion - using server defaults.</p>
+                            </div>
                             {% endif %}
                         </div>
                     </fieldset>
@@ -153,14 +157,27 @@
 
                 const n = parseInt(document.getElementById('n').value, 10);
                 const params = new URLSearchParams({ n: n });
-                const user_identifier = document.getElementById('jellyfin_user_identifier').value;
-                if (!user_identifier) {
-                    statusDiv.textContent = 'Jellyfin User Identifier is required.';
-                    statusDiv.className = 'status-error';
-                    resultsContainer.classList.remove('hidden');
-                    return;
+                
+                if (mediaserverType === 'jellyfin') {
+                    const user_identifier = document.getElementById('jellyfin_user_identifier').value;
+                    if (!user_identifier) {
+                        statusDiv.textContent = 'Jellyfin User Identifier is required.';
+                        statusDiv.className = 'status-error';
+                        resultsContainer.classList.remove('hidden');
+                        return;
+                    }
+                    params.append('jellyfin_user_identifier', user_identifier);
+                } else if (mediaserverType === 'navidrome') {
+                    const navidrome_user = document.getElementById('navidrome_user').value;
+                    if (!navidrome_user) {
+                        statusDiv.textContent = 'Navidrome Username is required.';
+                        statusDiv.className = 'status-error';
+                        resultsContainer.classList.remove('hidden');
+                        return;
+                    }
+                    params.append('navidrome_user', navidrome_user);
                 }
-                params.append('jellyfin_user_identifier', user_identifier);
+                // For Lyrion, no additional parameters needed
                 // REMOVED: The token is no longer appended to the request
 
                 resultsContainer.classList.remove('hidden');
@@ -232,6 +249,7 @@
                     payload.user_creds.user = document.getElementById('navidrome_user').value;
                     // REMOVED: The password is no longer included in the payload
                 }
+                // For Lyrion, user_creds remains empty object
 
                 playlistStatusDiv.textContent = 'Creating playlist...';
                 

@@ -504,13 +504,17 @@ def get_tracks_by_ids(item_ids_list):
         return []
     conn = get_db()
     cur = conn.cursor(cursor_factory=DictCursor)
+    
+    # Convert item_ids to strings to match the text type in database
+    item_ids_str = [str(item_id) for item_id in item_ids_list]
+    
     query = """
         SELECT s.item_id, s.title, s.author, s.tempo, s.key, s.scale, s.mood_vector, s.energy, s.other_features, e.embedding
         FROM score s
         LEFT JOIN embedding e ON s.item_id = e.item_id
         WHERE s.item_id IN %s
     """
-    cur.execute(query, (tuple(item_ids_list),))
+    cur.execute(query, (tuple(item_ids_str),))
     rows = cur.fetchall()
     cur.close()
 
