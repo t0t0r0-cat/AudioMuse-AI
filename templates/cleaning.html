@@ -322,11 +322,19 @@
                     if (!response.ok) throw new Error(`HTTP ${response.status}`);
                     
                     const data = await response.json();
+                    
+                    // Check if task is finished and stop timer BEFORE updating status
+                    if (['SUCCESS', 'FAILURE', 'REVOKED'].includes(data.status)) {
+                        clearInterval(cleanInterval);
+                        // Clear timer immediately to stop counting
+                        currentTaskId = null;
+                        startTime = null;
+                    }
+                    
                     updateTaskStatus(data);
                     saveTaskStateToStorage();
                     
                     if (['SUCCESS', 'FAILURE', 'REVOKED'].includes(data.status)) {
-                        clearInterval(cleanInterval);
                         if (data.status === 'SUCCESS') {
                             handleCleaningComplete(data);
                         } else {
