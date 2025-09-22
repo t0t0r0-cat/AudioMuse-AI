@@ -107,17 +107,17 @@ def start_analysis_endpoint():
     )
     return jsonify({"task_id": job.id, "task_type": "main_analysis", "status": job.get_status()}), 202
 
-@analysis_bp.route('/api/cleaning/identify', methods=['POST'])
-def start_cleaning_identification_endpoint():
+@analysis_bp.route('/api/cleaning/start', methods=['POST'])
+def start_cleaning_endpoint():
     """
-    Identify orphaned albums that exist in the database but not on the media server.
-    This endpoint enqueues a cleaning identification task.
+    Identify and automatically clean orphaned albums from the database.
+    This endpoint enqueues a cleaning task that both identifies and deletes orphaned albums.
     ---
     tags:
       - Cleaning
     responses:
       202:
-        description: Cleaning identification task successfully enqueued.
+        description: Database cleaning task successfully enqueued.
         content:
           application/json:
             schema:
@@ -125,11 +125,11 @@ def start_cleaning_identification_endpoint():
               properties:
                 task_id:
                   type: string
-                  description: The ID of the enqueued cleaning identification task.
+                  description: The ID of the enqueued database cleaning task.
                 task_type:
                   type: string
-                  description: Type of the task (cleaning_identify).
-                  example: cleaning_identify
+                  description: Type of the task (cleaning).
+                  example: cleaning
                 status:
                   type: string
                   description: The initial status of the job in the queue (e.g., queued).
@@ -143,98 +143,16 @@ def start_cleaning_identification_endpoint():
     clean_up_previous_main_tasks()
 
     job_id = str(uuid.uuid4())
-    save_task_status(job_id, "cleaning_identify", TASK_STATUS_PENDING, details={"message": "Cleaning identification task enqueued."})
+    save_task_status(job_id, "cleaning", TASK_STATUS_PENDING, details={"message": "Database cleaning task enqueued."})
 
-    # Enqueue cleaning identification task
+    # Enqueue combined cleaning task
     job = rq_queue_high.enqueue(
-        'tasks.cleaning.identify_orphaned_albums_task',
+        'tasks.cleaning.identify_and_clean_orphaned_albums_task',
         job_id=job_id,
-        description="Orphaned Albums Identification",
+        description="Database Cleaning (Identify and Delete Orphaned Albums)",
         retry=Retry(max=2),
         job_timeout=-1 # No timeout
     )
-    return jsonify({"task_id": job.id, "task_type": "cleaning_identify", "status": job.get_status()}), 202
+    return jsonify({"task_id": job.id, "task_type": "cleaning", "status": job.get_status()}), 202
 
-@analysis_bp.route('/api/cleaning/delete', methods=['POST'])
-def delete_orphaned_albums_endpoint():
-    """
-    Delete confirmed orphaned albums from the database.
-    This is a synchronous operation that requires explicit confirmation.
-    ---
-    tags:
-      - Cleaning
-    requestBody:
-      description: List of track IDs to delete from the database.
-      required: true
-      content:
-        application/json:
-          schema:
-            type: object
-            properties:
-              orphaned_track_ids:
-                type: array
-                items:
-                  type: string
-                description: List of track IDs to delete from database.
-                example: ["track_id_1", "track_id_2"]
-              confirm:
-                type: boolean
-                description: Explicit confirmation flag (must be true).
-                example: true
-    responses:
-      200:
-        description: Deletion operation completed.
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                status:
-                  type: string
-                  description: Operation status (SUCCESS or FAILURE).
-                message:
-                  type: string
-                  description: Summary message.
-                deleted_count:
-                  type: integer
-                  description: Number of tracks successfully deleted.
-                failed_deletions:
-                  type: array
-                  description: List of failed deletion attempts.
-                total_requested:
-                  type: integer
-                  description: Total number of tracks requested for deletion.
-      400:
-        description: Invalid input or missing confirmation.
-      500:
-        description: Server error during deletion.
-    """
-    # Local import to prevent circular dependency
-    from tasks.cleaning import delete_orphaned_albums_sync
 
-    data = request.json or {}
-    orphaned_track_ids = data.get('orphaned_track_ids', [])
-    confirm = data.get('confirm', False)
-
-    # Validation
-    if not isinstance(orphaned_track_ids, list):
-        return jsonify({"error": "orphaned_track_ids must be a list"}), 400
-    
-    if not confirm:
-        return jsonify({"error": "Explicit confirmation required. Set 'confirm': true"}), 400
-    
-    if not orphaned_track_ids:
-        return jsonify({"error": "No track IDs provided for deletion"}), 400
-
-    try:
-        # Call the synchronous deletion function
-        result = delete_orphaned_albums_sync(orphaned_track_ids)
-        status_code = 200 if result["status"] == "SUCCESS" else 500
-        return jsonify(result), status_code
-    except Exception as e:
-        logger.error(f"Error during orphaned album deletion: {e}", exc_info=True)
-        return jsonify({
-            "status": "FAILURE",
-            "message": f"Server error during deletion: {str(e)}",
-            "deleted_count": 0
-        }), 500

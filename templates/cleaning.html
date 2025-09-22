@@ -8,57 +8,12 @@
     <link rel="stylesheet" href="/static/style.css">
     <link rel="stylesheet" href="/static/menu.css">
     <style>
-        .orphaned-album {
-            background-color: #f8f9fa;
-            border: 1px solid #dee2e6;
-            border-radius: 8px;
-            padding: 1rem;
-            margin-bottom: 1rem;
-        }
-        .orphaned-album h4 {
-            margin: 0 0 0.5rem 0;
-            color: #dc3545;
-        }
-        .track-list {
-            max-height: 200px;
-            overflow-y: auto;
-            font-size: 0.9rem;
-        }
-        .track-item {
-            padding: 0.25rem 0;
-            border-bottom: 1px solid #e9ecef;
-        }
-        .track-item:last-child {
-            border-bottom: none;
-        }
         .cleaning-summary {
             background-color: #e7f3ff;
             border: 1px solid #b3d9ff;
             border-radius: 8px;
             padding: 1rem;
             margin-bottom: 1.5rem;
-        }
-        .warning-box {
-            background-color: #fff3cd;
-            border: 1px solid #ffeaa7;
-            border-radius: 8px;
-            padding: 1rem;
-            margin-bottom: 1.5rem;
-            color: #856404;
-        }
-        .danger-button {
-            background-color: #dc3545 !important;
-            border-color: #dc3545 !important;
-            color: white !important;
-        }
-        .danger-button:hover {
-            background-color: #c82333 !important;
-            border-color: #bd2130 !important;
-        }
-        .danger-button:disabled {
-            background-color: #6c757d !important;
-            border-color: #6c757d !important;
-            cursor: not-allowed;
         }
         .active-button {
             background-color: #2563EB !important;
@@ -74,52 +29,19 @@
             border-color: #6c757d !important;
             cursor: not-allowed;
         }
-        .confirmation-section {
-            display: none;
-            background-color: #f8d7da;
-            border: 1px solid #f5c6cb;
-            border-radius: 8px;
-            padding: 1.5rem;
-            margin-top: 1.5rem;
-        }
-        .confirmation-section.show {
-            display: block;
-        }
-        .checkbox-group {
-            margin: 1rem 0;
-            display: flex;
-            align-items: center;
-        }
-        .checkbox-group input[type="checkbox"] {
-            margin-right: 0.5rem;
-            transform: scale(1.2);
-        }
-        
-        /* Selection button styling */
-        .btn {
-            padding: 0.5rem 1rem;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 0.875rem;
-            transition: background-color 0.2s ease;
-            font-weight: 500;
-        }
-        
-        .btn-secondary {
-            background-color: #2563EB !important;
-            border: 1px solid #2563EB !important;
+        .danger-button {
+            background-color: #dc3545 !important;
+            border-color: #dc3545 !important;
             color: white !important;
         }
-        
-        .btn-secondary:hover {
-            background-color: #1d4ed8 !important;
-            border-color: #1d4ed8 !important;
+        .danger-button:hover {
+            background-color: #c82333 !important;
+            border-color: #bd2130 !important;
         }
-        
-        .btn-secondary:active {
-            background-color: #1e40af !important;
-            border-color: #1e40af !important;
+        .danger-button:disabled {
+            background-color: #6c757d !important;
+            border-color: #6c757d !important;
+            cursor: not-allowed;
         }
     </style>
 </head>
@@ -140,23 +62,23 @@
                     <section>
                         <div class="page-header">
                             <h1>Database Cleaning</h1>
-                            <p class="subtitle">Identify and remove orphaned albums from the database that no longer exist on the media server.</p>
+                            <p class="subtitle">Automatically scan and clean orphaned albums from the database that no longer exist on the media server.</p>
                         </div>
                     </section>
 
-                    <!-- Step 1: Scan for Orphaned Albums -->
-                    <section id="scan-section">
-                        <h2>Step 1: Scan for Orphaned Albums</h2>
-                        <p>First, run a scan to identify albums that exist in the database but are no longer present on your media server.</p>
+                    <!-- Database Cleaning Section -->
+                    <section id="cleaning-section">
+                        <h2>Database Cleaning</h2>
+                        <p>Run a scan to identify and automatically remove albums that exist in the database but are no longer present on your media server.</p>
                         
                         <div class="task-buttons">
-                            <button id="start-scan-btn" class="active-button">Start Orphaned Album Scan</button>
-                            <button id="cancel-scan-btn" class="danger-button" style="display: none;" disabled>Cancel Scan</button>
+                            <button id="start-clean-btn" class="active-button">Start Database Cleaning</button>
+                            <button id="cancel-clean-btn" class="danger-button" style="display: none;" disabled>Cancel Cleaning</button>
                         </div>
 
                         <!-- Task Status Display -->
-                        <div id="scan-status-display" style="display: none; margin-top: 1.5rem;">
-                            <h3>Scan Status</h3>
+                        <div id="clean-status-display" style="display: none; margin-top: 1.5rem;">
+                            <h3>Cleaning Status</h3>
                             <div id="task-status-display">
                                 <p><span class="status-label">Task ID:</span> <span id="status-task-id">N/A</span></p>
                                 <p><span class="status-label">Running Time:</span> <span id="status-running-time">-- : -- : --</span></p>
@@ -172,60 +94,13 @@
                                 </div>
                             </div>
                         </div>
-                    </section>
 
-                    <!-- Step 2: Review and Clean -->
-                    <section id="results-section" style="display: none;">
-                        <h2>Step 2: Review Orphaned Albums</h2>
-                        
-                        <div id="cleaning-summary" class="cleaning-summary">
-                            <!-- Summary will be populated by JavaScript -->
-                        </div>
-
-                        <div id="orphaned-albums-list">
-                            <!-- Orphaned albums will be populated by JavaScript -->
-                        </div>
-
-                        <div id="selection-controls" class="selection-controls" style="display: none;">
-                            <div class="selection-summary">
-                                <span id="selected-count">0</span> of <span id="total-count">0</span> albums selected
-                                (<span id="selected-tracks">0</span> tracks)
+                        <!-- Cleaning Results -->
+                        <div id="cleaning-results" style="display: none; margin-top: 1.5rem;">
+                            <h3>Cleaning Results</h3>
+                            <div id="cleaning-summary" class="cleaning-summary">
+                                <!-- Summary will be populated by JavaScript -->
                             </div>
-                            <div class="selection-buttons">
-                                <button type="button" id="select-all-btn" class="btn btn-secondary">Select All</button>
-                                <button type="button" id="deselect-all-btn" class="btn btn-secondary">Deselect All</button>
-                            </div>
-                        </div>
-
-                        <div class="warning-box">
-                            <h4>⚠️ Warning</h4>
-                            <p>This action will permanently delete the selected albums and their analysis data from the database. This action cannot be undone.</p>
-                        </div>
-
-                        <div class="task-buttons">
-                            <button id="show-confirm-btn" class="danger-button" disabled>Delete Selected Albums</button>
-                        </div>
-
-                        <!-- Confirmation Section -->
-                        <div id="confirmation-section" class="confirmation-section">
-                            <h3>⚠️ Final Confirmation Required</h3>
-                            <p>You are about to permanently delete <strong id="delete-count">0</strong> orphaned tracks from the database.</p>
-                            
-                            <div class="checkbox-group">
-                                <input type="checkbox" id="confirm-deletion" name="confirm-deletion">
-                                <label for="confirm-deletion">I understand this action cannot be undone and want to proceed with the deletion.</label>
-                            </div>
-
-                            <div class="task-buttons">
-                                <button id="confirm-delete-btn" class="danger-button" disabled>Confirm Deletion</button>
-                                <button id="cancel-delete-btn">Cancel</button>
-                            </div>
-                        </div>
-
-                        <!-- Deletion Results -->
-                        <div id="deletion-results" style="display: none; margin-top: 1.5rem;">
-                            <h3>Deletion Results</h3>
-                            <div id="deletion-summary"></div>
                         </div>
                     </section>
                 </div>
@@ -236,27 +111,14 @@
     <script>
         // Global variables
         let currentTaskId = null;
-        let scanInterval = null;
-        let orphanedData = null;
+        let cleanInterval = null;
         let startTime = null;
 
         // DOM elements
-        const startScanBtn = document.getElementById('start-scan-btn');
-        const cancelScanBtn = document.getElementById('cancel-scan-btn');
-        const scanStatusDisplay = document.getElementById('scan-status-display');
-        const resultsSection = document.getElementById('results-section');
-        const showConfirmBtn = document.getElementById('show-confirm-btn');
-        const confirmationSection = document.getElementById('confirmation-section');
-        const confirmDeleteBtn = document.getElementById('confirm-delete-btn');
-        const cancelDeleteBtn = document.getElementById('cancel-delete-btn');
-        const confirmDeletionCheckbox = document.getElementById('confirm-deletion');
-        const deletionResults = document.getElementById('deletion-results');
-        const selectionControls = document.getElementById('selection-controls');
-        const selectAllBtn = document.getElementById('select-all-btn');
-        const deselectAllBtn = document.getElementById('deselect-all-btn');
-        const selectedCountSpan = document.getElementById('selected-count');
-        const totalCountSpan = document.getElementById('total-count');
-        const selectedTracksSpan = document.getElementById('selected-tracks');
+        const startCleanBtn = document.getElementById('start-clean-btn');
+        const cancelCleanBtn = document.getElementById('cancel-clean-btn');
+        const cleanStatusDisplay = document.getElementById('clean-status-display');
+        const cleaningResults = document.getElementById('cleaning-results');
 
         // Initialize page - check for existing task
         document.addEventListener('DOMContentLoaded', function() {
@@ -265,27 +127,16 @@
         });
 
         // Event listeners
-        startScanBtn.addEventListener('click', startScan);
-        cancelScanBtn.addEventListener('click', cancelScan);
-        showConfirmBtn.addEventListener('click', showConfirmation);
-        confirmDeleteBtn.addEventListener('click', confirmDeletion);
-        cancelDeleteBtn.addEventListener('click', hideConfirmation);
-        confirmDeletionCheckbox.addEventListener('change', toggleConfirmButton);
-        selectAllBtn.addEventListener('click', selectAllAlbums);
-        deselectAllBtn.addEventListener('click', deselectAllAlbums);
-        selectAllBtn.addEventListener('click', selectAllAlbums);
-        deselectAllBtn.addEventListener('click', deselectAllAlbums);
+        startCleanBtn.addEventListener('click', startCleaning);
+        cancelCleanBtn.addEventListener('click', cancelCleaning);
 
         // Save and load task state
         function saveTaskStateToStorage() {
-            const selectedIndices = Array.from(document.querySelectorAll('.album-checkbox:checked')).map(cb => parseInt(cb.dataset.albumIndex));
             const state = {
                 currentTaskId,
                 startTime,
-                orphanedData,
-                selectedAlbumIndices: selectedIndices,
-                scanStatusVisible: scanStatusDisplay.style.display !== 'none',
-                resultsVisible: resultsSection.style.display !== 'none'
+                cleanStatusVisible: cleanStatusDisplay.style.display !== 'none',
+                resultsVisible: cleaningResults.style.display !== 'none'
             };
             localStorage.setItem('cleaningTaskState', JSON.stringify(state));
         }
@@ -297,27 +148,12 @@
                     const state = JSON.parse(saved);
                     currentTaskId = state.currentTaskId;
                     startTime = state.startTime;
-                    orphanedData = state.orphanedData;
                     
-                    if (state.scanStatusVisible) {
-                        scanStatusDisplay.style.display = 'block';
+                    if (state.cleanStatusVisible) {
+                        cleanStatusDisplay.style.display = 'block';
                     }
-                    if (state.resultsVisible && orphanedData) {
-                        displayOrphanedAlbums(orphanedData);
-                        resultsSection.style.display = 'block';
-                        
-                        // Restore selected albums
-                        if (state.selectedAlbumIndices && state.selectedAlbumIndices.length > 0) {
-                            setTimeout(() => {
-                                state.selectedAlbumIndices.forEach(index => {
-                                    const checkbox = document.querySelector(`[data-album-index="${index}"]`);
-                                    if (checkbox) {
-                                        checkbox.checked = true;
-                                        handleAlbumSelection(checkbox, index);
-                                    }
-                                });
-                            }, 100);
-                        }
+                    if (state.resultsVisible) {
+                        cleaningResults.style.display = 'block';
                     }
                 } catch (e) {
                     console.error('Failed to load task state:', e);
@@ -330,20 +166,19 @@
             localStorage.removeItem('cleaningTaskState');
         }
 
-        // Fetch and display last task status (like index.html)
+        // Fetch and display last task status
         async function fetchAndDisplayLastTask() {
             try {
                 const response = await fetch('/api/last_task');
                 if (response.ok) {
                     const lastTask = await response.json();
-                    if (lastTask && lastTask.task_id && lastTask.task_type === 'cleaning_identify') {
+                    if (lastTask && lastTask.task_id && lastTask.task_type === 'cleaning') {
                         displayTaskStatus(lastTask);
                         // If it was successful and has results, show them
                         if (['SUCCESS', 'FINISHED'].includes((lastTask.status || lastTask.state || '').toUpperCase()) && 
                             lastTask.details?.final_summary_details) {
-                            orphanedData = lastTask.details.final_summary_details;
-                            displayOrphanedAlbums(orphanedData);
-                            resultsSection.style.display = 'block';
+                            displayCleaningResults(lastTask.details.final_summary_details);
+                            cleaningResults.style.display = 'block';
                             saveTaskStateToStorage();
                         }
                     } else {
@@ -358,7 +193,7 @@
             }
         }
 
-        // Display task status (like index.html)
+        // Display task status
         function displayTaskStatus(task) {
             document.getElementById('status-task-id').textContent = task.task_id || 'N/A';
             document.getElementById('status-running-time').textContent = formatRunningTime(task.running_time_seconds);
@@ -379,7 +214,7 @@
             document.getElementById('status-message').textContent = statusMessage;
         }
 
-        // Format running time (like index.html)
+        // Format running time
         function formatRunningTime(seconds) {
             if (!seconds) return '-- : -- : --';
             const hours = Math.floor(seconds / 3600);
@@ -395,17 +230,17 @@
                 const activeResponse = await fetch('/api/active_tasks');
                 if (activeResponse.ok) {
                     const activeData = await activeResponse.json();
-                    if (activeData.task_id && activeData.task_type === 'cleaning_identify' && 
+                    if (activeData.task_id && activeData.task_type === 'cleaning' && 
                         ['STARTED', 'PROGRESS'].includes(activeData.status)) {
                         // Resume existing active task
                         currentTaskId = activeData.task_id;
                         startTime = Date.now() - (activeData.running_time_seconds * 1000);
                         
                         // Update UI to show active task
-                        startScanBtn.disabled = true;
-                        cancelScanBtn.style.display = 'inline-block';
-                        cancelScanBtn.disabled = false;
-                        scanStatusDisplay.style.display = 'block';
+                        startCleanBtn.disabled = true;
+                        cancelCleanBtn.style.display = 'inline-block';
+                        cancelCleanBtn.disabled = false;
+                        cleanStatusDisplay.style.display = 'block';
                         
                         document.getElementById('status-task-id').textContent = currentTaskId;
                         
@@ -417,7 +252,7 @@
                     }
                 }
                 
-                // If no active task, fetch and display last task (like index.html)
+                // If no active task, fetch and display last task
                 await fetchAndDisplayLastTask();
                 return false; // No active task
             } catch (error) {
@@ -426,10 +261,10 @@
             }
         }
 
-        // Start scan function
-        async function startScan() {
+        // Start cleaning function
+        async function startCleaning() {
             try {
-                const response = await fetch('/api/cleaning/identify', {
+                const response = await fetch('/api/cleaning/start', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' }
                 });
@@ -442,11 +277,11 @@
                 currentTaskId = data.task_id;
                 
                 // Update UI - disable start, enable cancel
-                startScanBtn.disabled = true;
-                cancelScanBtn.style.display = 'inline-block';
-                cancelScanBtn.disabled = false;
-                scanStatusDisplay.style.display = 'block';
-                resultsSection.style.display = 'none';
+                startCleanBtn.disabled = true;
+                cancelCleanBtn.style.display = 'inline-block';
+                cancelCleanBtn.disabled = false;
+                cleanStatusDisplay.style.display = 'block';
+                cleaningResults.style.display = 'none';
                 
                 document.getElementById('status-task-id').textContent = currentTaskId;
                 startTime = Date.now();
@@ -456,13 +291,13 @@
                 pollTaskStatus();
                 
             } catch (error) {
-                console.error('Error starting scan:', error);
-                alert('Failed to start scan: ' + error.message);
+                console.error('Error starting cleaning:', error);
+                alert('Failed to start cleaning: ' + error.message);
             }
         }
 
-        // Cancel scan function
-        async function cancelScan() {
+        // Cancel cleaning function
+        async function cancelCleaning() {
             if (!currentTaskId) return;
             
             try {
@@ -470,16 +305,16 @@
                 resetUI();
                 clearTaskStateFromStorage();
             } catch (error) {
-                console.error('Error canceling scan:', error);
-                alert('Failed to cancel scan: ' + error.message);
+                console.error('Error canceling cleaning:', error);
+                alert('Failed to cancel cleaning: ' + error.message);
             }
         }
 
         // Poll task status
         function pollTaskStatus() {
-            if (scanInterval) clearInterval(scanInterval);
+            if (cleanInterval) clearInterval(cleanInterval);
             
-            scanInterval = setInterval(async () => {
+            cleanInterval = setInterval(async () => {
                 if (!currentTaskId) return;
                 
                 try {
@@ -491,11 +326,11 @@
                     saveTaskStateToStorage();
                     
                     if (['SUCCESS', 'FAILURE', 'REVOKED'].includes(data.status)) {
-                        clearInterval(scanInterval);
+                        clearInterval(cleanInterval);
                         if (data.status === 'SUCCESS') {
-                            handleScanComplete(data);
+                            handleCleaningComplete(data);
                         } else {
-                            handleScanError(data);
+                            handleCleaningError(data);
                         }
                         clearTaskStateFromStorage();
                     }
@@ -507,7 +342,8 @@
 
         // Update task status display
         function updateTaskStatus(data) {
-            document.getElementById('status-status').textContent = data.status || 'N/A';
+            const stateUpper = (data.state || data.status || 'N/A').toUpperCase();
+            document.getElementById('status-status').textContent = stateUpper;
             document.getElementById('status-progress').textContent = data.progress || 0;
             document.getElementById('progress-bar').style.width = `${data.progress || 0}%`;
             document.getElementById('status-message').textContent = data.details?.status_message || 'N/A';
@@ -522,33 +358,30 @@
                     `${hours.toString().padStart(2, '0')} : ${minutes.toString().padStart(2, '0')} : ${seconds.toString().padStart(2, '0')}`;
             }
             
-            // Update details - backend now handles log truncation
+            // Update details - backend handles log truncation
             if (data.details) {
                 document.getElementById('status-details').textContent = JSON.stringify(data.details, null, 2);
             }
             
             // Auto-show results if task completed successfully with data
-            const stateUpper = (data.status || '').toUpperCase();
             if (['SUCCESS', 'FINISHED'].includes(stateUpper) && data.details?.final_summary_details) {
                 console.log('Task completed successfully, auto-showing results');
-                orphanedData = data.details.final_summary_details;
-                displayOrphanedAlbums(orphanedData);
-                resultsSection.style.display = 'block';
+                displayCleaningResults(data.details.final_summary_details);
+                cleaningResults.style.display = 'block';
                 saveTaskStateToStorage();
             }
         }
 
-        // Handle scan completion
-        function handleScanComplete(data) {
-            console.log('Scan completed, data:', data);
+        // Handle cleaning completion
+        function handleCleaningComplete(data) {
+            console.log('Cleaning completed, data:', data);
             const details = data.details?.final_summary_details;
-            if (details && details.orphaned_albums) {
-                console.log('Displaying orphaned albums automatically');
-                orphanedData = details;
+            if (details) {
+                console.log('Displaying cleaning results automatically');
                 
                 // Force immediate display of results
-                displayOrphanedAlbums(details);
-                resultsSection.style.display = 'block';
+                displayCleaningResults(details);
+                cleaningResults.style.display = 'block';
                 
                 // Also update the task status display
                 displayTaskStatus(data);
@@ -556,270 +389,60 @@
                 console.log('Results section display set to block');
                 saveTaskStateToStorage();
             } else {
-                console.log('No orphaned albums data found');
-                alert('Scan completed but no orphaned albums data found.');
+                console.log('No cleaning results data found');
+                alert('Cleaning completed but no results data found.');
                 displayTaskStatus(data);
             }
-            resetScanUI();
+            resetCleaningUI();
         }
 
-        // Handle scan error
-        function handleScanError(data) {
-            alert(`Scan failed: ${data.details?.error_message || 'Unknown error'}`);
-            resetScanUI();
+        // Handle cleaning error
+        function handleCleaningError(data) {
+            alert(`Cleaning failed: ${data.details?.error_message || 'Unknown error'}`);
+            resetCleaningUI();
         }
 
-        // Display orphaned albums
-        function displayOrphanedAlbums(data) {
+        // Display cleaning results
+        function displayCleaningResults(data) {
             const summaryDiv = document.getElementById('cleaning-summary');
-            const albumsListDiv = document.getElementById('orphaned-albums-list');
             
-            // Create summary
-            summaryDiv.innerHTML = `
-                <h3>Scan Results Summary</h3>
-                <p><strong>Total albums on media server:</strong> ${data.total_media_server_albums}</p>
-                <p><strong>Total tracks on media server:</strong> ${data.total_media_server_tracks}</p>
-                <p><strong>Total tracks in database:</strong> ${data.total_database_tracks}</p>
-                <p><strong>Orphaned albums found:</strong> ${data.orphaned_albums_count}</p>
-                <p><strong>Orphaned tracks to be deleted:</strong> ${data.orphaned_tracks_count}</p>
-            `;
-            
-            // Create orphaned albums list with checkboxes
-            if (data.orphaned_albums && data.orphaned_albums.length > 0) {
-                let albumsHtml = '<h3>Orphaned Albums Details</h3><p>Select albums to delete:</p>';
-                
-                data.orphaned_albums.forEach((album, index) => {
-                    albumsHtml += `
-                        <div class="orphaned-album">
-                            <div class="album-header">
-                                <input type="checkbox" class="album-checkbox" data-album-index="${index}" 
-                                       onchange="handleAlbumSelection(this, ${index})">
-                                <div class="album-title">${album.artist}</div>
-                                <div class="track-count">(${album.track_count} tracks)</div>
-                            </div>
-                            <div class="track-list">
-                    `;
-                    
-                    album.tracks.forEach(track => {
-                        albumsHtml += `
-                            <div class="track-item">
-                                <strong>${track.title}</strong> by ${track.author}
-                                <span style="color: #6c757d; font-size: 0.8rem;">(ID: ${track.item_id})</span>
-                            </div>
-                        `;
-                    });
-                    
-                    albumsHtml += `
-                            </div>
-                        </div>
-                    `;
-                });
-                
-                albumsListDiv.innerHTML = albumsHtml;
-                
-                // Show selection controls and update summary
-                selectionControls.style.display = 'flex';
-                totalCountSpan.textContent = data.orphaned_albums.length;
-                selectedCountSpan.textContent = '0';
-                selectedTracksSpan.textContent = '0';
-                showConfirmBtn.disabled = true; // Disabled until something is selected
-            } else {
-                albumsListDiv.innerHTML = '<p>No orphaned albums found. Your database is clean!</p>';
-                selectionControls.style.display = 'none';
-                showConfirmBtn.disabled = true;
-            }
-        }
-
-        // Show confirmation section
-        function showConfirmation() {
-            const selectedCheckboxes = document.querySelectorAll('.album-checkbox:checked');
-            if (selectedCheckboxes.length === 0) {
-                alert('Please select at least one album to delete.');
-                return;
-            }
-            
-            let selectedTrackCount = 0;
-            selectedCheckboxes.forEach(checkbox => {
-                const albumIndex = parseInt(checkbox.dataset.albumIndex);
-                selectedTrackCount += orphanedData.orphaned_albums[albumIndex].track_count;
-            });
-            
-            document.getElementById('delete-count').textContent = selectedTrackCount;
-            confirmationSection.classList.add('show');
-        }
-
-        // Hide confirmation section
-        function hideConfirmation() {
-            confirmationSection.classList.remove('show');
-            confirmDeletionCheckbox.checked = false;
-            confirmDeleteBtn.disabled = true;
-        }
-
-        // Selection control functions
-        function selectAllAlbums() {
-            const checkboxes = document.querySelectorAll('.album-checkbox');
-            checkboxes.forEach(checkbox => {
-                checkbox.checked = true;
-                const albumDiv = checkbox.closest('.orphaned-album');
-                albumDiv.classList.add('selected');
-            });
-            updateSelectionSummary();
-        }
-
-        function deselectAllAlbums() {
-            const checkboxes = document.querySelectorAll('.album-checkbox');
-            checkboxes.forEach(checkbox => {
-                checkbox.checked = false;
-                const albumDiv = checkbox.closest('.orphaned-album');
-                albumDiv.classList.remove('selected');
-            });
-            updateSelectionSummary();
-        }
-
-        function updateSelectionSummary() {
-            const checkboxes = document.querySelectorAll('.album-checkbox');
-            const selectedCheckboxes = document.querySelectorAll('.album-checkbox:checked');
-            
-            let selectedTrackCount = 0;
-            selectedCheckboxes.forEach(checkbox => {
-                const albumIndex = parseInt(checkbox.dataset.albumIndex);
-                selectedTrackCount += orphanedData.orphaned_albums[albumIndex].track_count;
-            });
-            
-            selectedCountSpan.textContent = selectedCheckboxes.length;
-            totalCountSpan.textContent = checkboxes.length;
-            selectedTracksSpan.textContent = selectedTrackCount;
-            
-            // Enable/disable delete button based on selection
-            showConfirmBtn.disabled = selectedCheckboxes.length === 0;
-        }
-
-        function handleAlbumSelection(checkbox, albumIndex) {
-            const albumDiv = checkbox.closest('.orphaned-album');
-            if (checkbox.checked) {
-                albumDiv.classList.add('selected');
-            } else {
-                albumDiv.classList.remove('selected');
-            }
-            updateSelectionSummary();
-        }
-
-        // Toggle confirm button based on checkbox
-        function toggleConfirmButton() {
-            confirmDeleteBtn.disabled = !confirmDeletionCheckbox.checked;
-        }
-
-        // Confirm deletion
-        async function confirmDeletion() {
-            if (!orphanedData || !confirmDeletionCheckbox.checked) return;
-            
-            const selectedCheckboxes = document.querySelectorAll('.album-checkbox:checked');
-            if (selectedCheckboxes.length === 0) {
-                alert('No albums selected for deletion.');
-                return;
-            }
-            
-            // Gather track IDs from selected albums only
-            const trackIds = [];
-            selectedCheckboxes.forEach(checkbox => {
-                const albumIndex = parseInt(checkbox.dataset.albumIndex);
-                const album = orphanedData.orphaned_albums[albumIndex];
-                album.tracks.forEach(track => {
-                    trackIds.push(track.item_id);
-                });
-            });
-            
-            try {
-                confirmDeleteBtn.disabled = true;
-                confirmDeleteBtn.textContent = 'Deleting...';
-                
-                const response = await fetch('/api/cleaning/delete', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        orphaned_track_ids: trackIds,
-                        confirm: true
-                    })
-                });
-                
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-                }
-                
-                const result = await response.json();
-                displayDeletionResults(result);
-                hideConfirmation();
-                
-                // Remove deleted albums from display and update selection
-                const selectedAlbumIndices = Array.from(selectedCheckboxes).map(cb => parseInt(cb.dataset.albumIndex));
-                selectedAlbumIndices.sort((a, b) => b - a); // Sort descending to remove from end first
-                selectedAlbumIndices.forEach(index => {
-                    orphanedData.orphaned_albums.splice(index, 1);
-                });
-                
-                // Update counts
-                orphanedData.orphaned_albums_count = orphanedData.orphaned_albums.length;
-                orphanedData.orphaned_tracks_count -= trackIds.length;
-                
-                // Refresh display
-                displayOrphanedAlbums(orphanedData);
-                saveTaskStateToStorage();
-                
-            } catch (error) {
-                console.error('Error during deletion:', error);
-                alert('Failed to delete orphaned albums: ' + error.message);
-            } finally {
-                confirmDeleteBtn.disabled = false;
-                confirmDeleteBtn.textContent = 'Confirm Deletion';
-            }
-        }
-
-        // Display deletion results
-        function displayDeletionResults(result) {
-            const resultsDiv = document.getElementById('deletion-summary');
-            
-            if (result.status === 'SUCCESS') {
-                resultsDiv.innerHTML = `
-                    <div style="background-color: #d1edff; border: 1px solid #bee5eb; border-radius: 8px; padding: 1rem; color: #0c5460;">
-                        <h4>✅ Deletion Completed Successfully</h4>
-                        <p><strong>Tracks deleted:</strong> ${result.deleted_count}</p>
-                        <p><strong>Total requested:</strong> ${result.total_requested}</p>
-                        ${result.failed_deletions && result.failed_deletions.length > 0 ? 
-                            `<p><strong>Failed deletions:</strong> ${result.failed_deletions.length}</p>` : ''}
-                        <p>${result.message}</p>
-                    </div>
+            if (data.deleted_count > 0) {
+                summaryDiv.innerHTML = `
+                    <h3>✅ Database Cleaning Completed Successfully</h3>
+                    <p><strong>Total albums on media server:</strong> ${data.total_media_server_albums}</p>
+                    <p><strong>Total tracks on media server:</strong> ${data.total_media_server_tracks}</p>
+                    <p><strong>Total tracks in database (before cleaning):</strong> ${data.total_database_tracks}</p>
+                    <p><strong>Orphaned albums found:</strong> ${data.orphaned_albums_count}</p>
+                    <p><strong>Orphaned tracks deleted:</strong> ${data.deleted_count}</p>
+                    ${data.failed_deletions && data.failed_deletions.length > 0 ? 
+                        `<p><strong>Failed deletions:</strong> ${data.failed_deletions.length}</p>` : ''}
+                    <p style="color: #28a745; font-weight: bold;">Database cleaned successfully! ${data.deleted_count} orphaned tracks removed.</p>
                 `;
             } else {
-                resultsDiv.innerHTML = `
-                    <div style="background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 8px; padding: 1rem; color: #721c24;">
-                        <h4>❌ Deletion Failed</h4>
-                        <p>${result.message}</p>
-                    </div>
+                summaryDiv.innerHTML = `
+                    <h3>✅ Database is Clean</h3>
+                    <p><strong>Total albums on media server:</strong> ${data.total_media_server_albums}</p>
+                    <p><strong>Total tracks on media server:</strong> ${data.total_media_server_tracks}</p>
+                    <p><strong>Total tracks in database:</strong> ${data.total_database_tracks}</p>
+                    <p style="color: #28a745; font-weight: bold;">No orphaned tracks found. Your database is already clean!</p>
                 `;
-            }
-            
-            deletionResults.style.display = 'block';
-            
-            // Hide the confirmation button after successful deletion
-            if (result.status === 'SUCCESS') {
-                showConfirmBtn.style.display = 'none';
             }
         }
 
         // Reset UI functions
-        function resetScanUI() {
-            startScanBtn.disabled = false;
-            cancelScanBtn.style.display = 'none';
-            cancelScanBtn.disabled = true;
+        function resetCleaningUI() {
+            startCleanBtn.disabled = false;
+            cancelCleanBtn.style.display = 'none';
+            cancelCleanBtn.disabled = true;
         }
 
         function resetUI() {
-            resetScanUI();
-            if (scanInterval) clearInterval(scanInterval);
+            resetCleaningUI();
+            if (cleanInterval) clearInterval(cleanInterval);
             currentTaskId = null;
             startTime = null;
-            scanStatusDisplay.style.display = 'none';
-            resultsSection.style.display = 'none';
+            cleanStatusDisplay.style.display = 'none';
+            cleaningResults.style.display = 'none';
         }
     </script>
     <script src="/static/menu.js"></script>

@@ -26,10 +26,10 @@ from redis.exceptions import TimeoutError as RedisTimeoutError
 logger = logging.getLogger(__name__)
 
 
-def identify_orphaned_albums_task():
+def identify_and_clean_orphaned_albums_task():
     """
-    Main RQ task to identify albums that exist in the database but not on the media server.
-    Returns a list of orphaned album information that can be used for confirmation before deletion.
+    Main RQ task to identify and automatically clean orphaned albums from the database.
+    This combines identification and deletion into a single automated process.
     """
     from app import (app, redis_conn, get_db, save_task_status, get_task_info_from_db,
                      TASK_STATUS_STARTED, TASK_STATUS_PROGRESS, TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED)
@@ -145,27 +145,57 @@ def identify_orphaned_albums_task():
             # Sort by track count (albums with more tracks first)
             orphaned_albums_list.sort(key=lambda x: x["track_count"], reverse=True)
             
+            if len(orphaned_track_ids) == 0:
+                log_and_update_main("✅ No orphaned tracks found. Database is clean!", 100, task_state=TASK_STATUS_SUCCESS)
+                return {
+                    "status": "SUCCESS", 
+                    "message": "No orphaned tracks found. Database is clean!",
+                    "total_media_server_albums": len(all_media_server_albums),
+                    "total_media_server_tracks": len(media_server_track_ids),
+                    "total_database_tracks": len(database_track_ids),
+                    "orphaned_tracks_count": 0,
+                    "orphaned_albums_count": 0,
+                    "deleted_count": 0
+                }
+            
+            log_and_update_main(f"🧹 Starting automatic deletion of {len(orphaned_track_ids)} orphaned tracks...", 95)
+            
+            # Step 6: Automatically delete all orphaned tracks
+            deletion_result = delete_orphaned_albums_sync(list(orphaned_track_ids))
+            
             summary = {
                 "total_media_server_albums": len(all_media_server_albums),
                 "total_media_server_tracks": len(media_server_track_ids),
                 "total_database_tracks": len(database_track_ids),
                 "orphaned_tracks_count": len(orphaned_track_ids),
                 "orphaned_albums_count": len(orphaned_albums_list),
-                "orphaned_albums": orphaned_albums_list
+                "orphaned_albums": orphaned_albums_list,
+                "deletion_result": deletion_result,
+                "deleted_count": deletion_result.get("deleted_count", 0),
+                "failed_deletions": deletion_result.get("failed_deletions", [])
             }
             
-            log_and_update_main(
-                f"✅ Orphaned album identification complete. Found {len(orphaned_albums_list)} orphaned albums with {len(orphaned_track_ids)} tracks.", 
-                100, 
-                task_state=TASK_STATUS_SUCCESS,
-                final_summary_details=summary
-            )
-            
-            return {
-                "status": "SUCCESS", 
-                "message": f"Identified {len(orphaned_albums_list)} orphaned albums",
-                **summary
-            }
+            if deletion_result["status"] == "SUCCESS":
+                log_and_update_main(
+                    f"✅ Cleaning complete! Identified and deleted {len(orphaned_albums_list)} orphaned albums ({deletion_result['deleted_count']} tracks).", 
+                    100, 
+                    task_state=TASK_STATUS_SUCCESS,
+                    final_summary_details=summary
+                )
+                
+                return {
+                    "status": "SUCCESS", 
+                    "message": f"Successfully cleaned {deletion_result['deleted_count']} orphaned tracks from {len(orphaned_albums_list)} albums",
+                    **summary
+                }
+            else:
+                log_and_update_main(
+                    f"⚠️ Cleaning partially failed. Deletion error: {deletion_result.get('message', 'Unknown error')}", 
+                    100, 
+                    task_state=TASK_STATUS_FAILURE,
+                    final_summary_details=summary
+                )
+                raise Exception(f"Deletion failed: {deletion_result.get('message', 'Unknown error')}")
 
         except OperationalError as e:
             logger.error(f"Database connection error during cleaning identification: {e}. This job will be retried.", exc_info=True)
