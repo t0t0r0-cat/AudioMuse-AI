@@ -310,7 +310,7 @@
             }
         }
 
-        // Poll task status
+        // Poll task status - SAME PATTERN AS ANALYSIS PAGE
         function pollTaskStatus() {
             if (cleanInterval) clearInterval(cleanInterval);
             
@@ -323,47 +323,70 @@
                 }
                 
                 try {
-                    const response = await fetch(`/api/status/${currentTaskId}`);
+                    // POLL ACTIVE TASKS API LIKE ANALYSIS PAGE
+                    const response = await fetch('/api/active_tasks');
                     if (!response.ok) {
-                        // If response is not ok, stop polling
-                        console.log('Status API returned error, stopping polling');
+                        console.log('Active tasks API returned error, stopping polling');
                         clearInterval(cleanInterval);
                         cleanInterval = null;
                         currentTaskId = null;
                         startTime = null;
+                        resetCleaningUI();
                         return;
                     }
                     
-                    const data = await response.json();
+                    const activeTask = await response.json();
                     
-                    // Check if task is finished and FORCE STOP timer BEFORE updating status
-                    if (['SUCCESS', 'FAILURE', 'REVOKED'].includes(data.status)) {
-                        console.log(`Task ${data.status}, FORCE STOPPING timer and polling`);
+                    // Check if our task is still active
+                    if (activeTask && activeTask.task_id === currentTaskId) {
+                        // Task is still active, update status
+                        updateTaskStatus(activeTask);
+                        saveTaskStateToStorage();
+                    } else {
+                        // Task is no longer active - GET FINAL STATUS LIKE ANALYSIS PAGE
+                        console.log(`Task ${currentTaskId} is no longer active - getting final status`);
+                        
+                        try {
+                            const finalStatusResponse = await fetch(`/api/status/${currentTaskId}`);
+                            if (finalStatusResponse.ok) {
+                                const finalStatusData = await finalStatusResponse.json();
+                                console.log('Final status received:', finalStatusData);
+                                
+                                // Update display with final status
+                                updateTaskStatus(finalStatusData);
+                                
+                                // Handle completion based on final status
+                                const finalStatus = (finalStatusData.state || finalStatusData.status || '').toUpperCase();
+                                if (finalStatus === 'SUCCESS') {
+                                    handleCleaningComplete(finalStatusData);
+                                } else if (['FAILURE', 'REVOKED'].includes(finalStatus)) {
+                                    handleCleaningError(finalStatusData);
+                                } else {
+                                    // Unknown final state, treat as completion
+                                    handleCleaningComplete(finalStatusData);
+                                }
+                            } else {
+                                console.log('Could not get final status, treating as completed');
+                                handleCleaningComplete({ status: 'SUCCESS', task_id: currentTaskId });
+                            }
+                        } catch (e) {
+                            console.error('Error getting final status:', e);
+                            handleCleaningComplete({ status: 'SUCCESS', task_id: currentTaskId });
+                        }
+                        
+                        // Clear polling regardless
                         clearInterval(cleanInterval);
                         cleanInterval = null;
-                        // Clear timer variables immediately to stop counting
-                        currentTaskId = null;
-                        startTime = null;
-                    }
-                    
-                    updateTaskStatus(data);
-                    saveTaskStateToStorage();
-                    
-                    if (['SUCCESS', 'FAILURE', 'REVOKED'].includes(data.status)) {
-                        if (data.status === 'SUCCESS') {
-                            handleCleaningComplete(data);
-                        } else {
-                            handleCleaningError(data);
-                        }
                         clearTaskStateFromStorage();
                     }
                 } catch (error) {
-                    console.error('Error polling status:', error);
+                    console.error('Error polling active tasks:', error);
                     // On error, also stop polling
                     clearInterval(cleanInterval);
                     cleanInterval = null;
                     currentTaskId = null;
                     startTime = null;
+                    resetCleaningUI();
                 }
             }, 2000);
         }
@@ -376,7 +399,7 @@
             document.getElementById('progress-bar').style.width = `${data.progress || 0}%`;
             document.getElementById('status-message').textContent = data.details?.status_message || 'N/A';
             
-            // FORCE STOP timer updates if task is completed or startTime is null
+            // Update running time ONLY if task is still running
             if (startTime && !['SUCCESS', 'FAILURE', 'REVOKED'].includes(stateUpper)) {
                 const elapsed = Math.floor((Date.now() - startTime) / 1000);
                 const hours = Math.floor(elapsed / 3600);
@@ -384,59 +407,60 @@
                 const seconds = elapsed % 60;
                 document.getElementById('status-running-time').textContent = 
                     `${hours.toString().padStart(2, '0')} : ${minutes.toString().padStart(2, '0')} : ${seconds.toString().padStart(2, '0')}`;
-            } else {
-                // FORCE STOP: If task is completed or no startTime, DON'T update running time
-                console.log('Timer update stopped - task completed or no startTime');
             }
             
             // Update details - backend handles log truncation
             if (data.details) {
                 document.getElementById('status-details').textContent = JSON.stringify(data.details, null, 2);
             }
-            
-            // Auto-show results if task completed successfully with data
-            if (['SUCCESS', 'FINISHED'].includes(stateUpper) && data.details?.final_summary_details) {
-                console.log('Task completed successfully, auto-showing results');
-                displayCleaningResults(data.details.final_summary_details);
-                cleaningResults.style.display = 'block';
-                saveTaskStateToStorage();
-            }
         }
 
         // Handle cleaning completion
         function handleCleaningComplete(data) {
-            console.log('Cleaning completed, data:', data);
+            console.log('Cleaning completed - STOPPING TIMER AND RESETTING UI');
+            
+            // FORCE STOP timer and polling
+            if (cleanInterval) {
+                clearInterval(cleanInterval);
+                cleanInterval = null;
+            }
+            currentTaskId = null;
+            startTime = null;
+            
+            // RESET UI BUTTONS immediately
+            resetCleaningUI();
+            
             const details = data.details?.final_summary_details;
             if (details) {
-                console.log('Displaying cleaning results automatically');
-                
-                // Force immediate display of results
+                console.log('Displaying cleaning results');
                 displayCleaningResults(details);
                 cleaningResults.style.display = 'block';
-                
-                // Also update the task status display
-                displayTaskStatus(data);
-                
-                console.log('Results section display set to block');
                 saveTaskStateToStorage();
             } else {
                 console.log('No cleaning results data found');
                 alert('Cleaning completed but no results data found.');
-                displayTaskStatus(data);
             }
-            resetCleaningUI();
-            // Clear the current task state to stop timer like index.html
-            currentTaskId = null;
-            startTime = null;
+            
+            // Also update the task status display
+            displayTaskStatus(data);
         }
 
         // Handle cleaning error
         function handleCleaningError(data) {
-            alert(`Cleaning failed: ${data.details?.error_message || 'Unknown error'}`);
-            resetCleaningUI();
-            // Clear the current task state to stop timer like index.html
+            console.log('Cleaning error - STOPPING TIMER AND RESETTING UI');
+            
+            // FORCE STOP timer and polling
+            if (cleanInterval) {
+                clearInterval(cleanInterval);
+                cleanInterval = null;
+            }
             currentTaskId = null;
             startTime = null;
+            
+            // RESET UI BUTTONS immediately
+            resetCleaningUI();
+            
+            alert(`Cleaning failed: ${data.details?.error_message || 'Unknown error'}`);
         }
 
         // Display cleaning results
