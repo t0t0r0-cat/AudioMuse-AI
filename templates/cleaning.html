@@ -356,6 +356,8 @@
                 const seconds = elapsed % 60;
                 document.getElementById('status-running-time').textContent = 
                     `${hours.toString().padStart(2, '0')} : ${minutes.toString().padStart(2, '0')} : ${seconds.toString().padStart(2, '0')}`;
+            } else {
+                // If no active startTime, don't update the running time (keeps last known time)
             }
             
             // Update details - backend handles log truncation
@@ -394,12 +396,18 @@
                 displayTaskStatus(data);
             }
             resetCleaningUI();
+            // Clear the current task state to stop timer like index.html
+            currentTaskId = null;
+            startTime = null;
         }
 
         // Handle cleaning error
         function handleCleaningError(data) {
             alert(`Cleaning failed: ${data.details?.error_message || 'Unknown error'}`);
             resetCleaningUI();
+            // Clear the current task state to stop timer like index.html
+            currentTaskId = null;
+            startTime = null;
         }
 
         // Display cleaning results
