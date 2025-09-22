@@ -131,19 +131,6 @@ def identify_and_clean_orphaned_albums_task():
             orphaned_track_ids = database_track_ids - media_server_track_ids
             log_and_update_main(f"🧹 Identified {len(orphaned_track_ids)} orphaned tracks", 90)
             
-            # Safety check: limit deletion to prevent accidents
-            total_orphaned_albums = len(orphaned_albums_list)
-            if total_orphaned_albums > CLEANING_SAFETY_LIMIT:
-                log_and_update_main(f"⚠️ Safety limit: Found {total_orphaned_albums} orphaned albums, limiting to first {CLEANING_SAFETY_LIMIT} for safety", 92)
-                # Keep only first CLEANING_SAFETY_LIMIT albums
-                orphaned_albums_list = orphaned_albums_list[:CLEANING_SAFETY_LIMIT]
-                # Recalculate track IDs for limited albums
-                limited_track_ids = set()
-                for album in orphaned_albums_list:
-                    for track in album["tracks"]:
-                        limited_track_ids.add(track["item_id"])
-                orphaned_track_ids = limited_track_ids
-            
             # Step 5: Group orphaned tracks by artist/album for better presentation
             orphaned_albums_info = defaultdict(lambda: {"tracks": [], "track_count": 0})
             
@@ -169,6 +156,21 @@ def identify_and_clean_orphaned_albums_task():
             
             # Sort by track count (albums with more tracks first)
             orphaned_albums_list.sort(key=lambda x: x["track_count"], reverse=True)
+            
+            # Safety check: limit deletion to prevent accidents
+            total_orphaned_albums = len(orphaned_albums_list)
+            safety_limit_applied = False
+            if total_orphaned_albums > CLEANING_SAFETY_LIMIT:
+                safety_limit_applied = True
+                log_and_update_main(f"⚠️ Safety limit: Found {total_orphaned_albums} orphaned albums, limiting to first {CLEANING_SAFETY_LIMIT} for safety", 92)
+                # Keep only first CLEANING_SAFETY_LIMIT albums
+                orphaned_albums_list = orphaned_albums_list[:CLEANING_SAFETY_LIMIT]
+                # Recalculate track IDs for limited albums
+                limited_track_ids = set()
+                for album in orphaned_albums_list:
+                    for track in album["tracks"]:
+                        limited_track_ids.add(track["item_id"])
+                orphaned_track_ids = limited_track_ids
             
             if len(orphaned_track_ids) == 0:
                 log_and_update_main("✅ No orphaned tracks found. Database is clean!", 95, task_state=TASK_STATUS_PROGRESS)
@@ -226,7 +228,7 @@ def identify_and_clean_orphaned_albums_task():
                     logger.warning(f"Failed to rebuild voyager index after cleaning: {e}")
                     log_and_update_main(f"⚠️ Warning: Failed to rebuild voyager index: {str(e)}", 99)
                 
-                safety_message = f" (Safety limit: deleted {len(orphaned_albums_list)} out of {total_orphaned_albums} albums)" if total_orphaned_albums > CLEANING_SAFETY_LIMIT else ""
+                safety_message = f" (Safety limit: deleted {len(orphaned_albums_list)} out of {total_orphaned_albums} albums)" if safety_limit_applied else ""
                 
                 log_and_update_main(
                     f"✅ Cleaning complete! Identified and deleted {len(orphaned_albums_list)} orphaned albums ({deletion_result['deleted_count']} tracks).{safety_message}", 
@@ -235,8 +237,11 @@ def identify_and_clean_orphaned_albums_task():
                     final_summary_details=summary
                 )
                 
-                if total_orphaned_albums > CLEANING_SAFETY_LIMIT:
-                    log_and_update_main(f"ℹ️ Safety note: {total_orphaned_albums - len(orphaned_albums_list)} additional orphaned albums remain. Run cleaning again to process more.", 100, task_state=TASK_STATUS_SUCCESS)
+                # Only show additional cleanup message if we actually hit the safety limit
+                if safety_limit_applied:
+                    remaining_count = total_orphaned_albums - len(orphaned_albums_list) 
+                    if remaining_count > 0:
+                        log_and_update_main(f"ℹ️ Safety note: {remaining_count} additional orphaned albums remain. Run cleaning again to process more.", 100, task_state=TASK_STATUS_SUCCESS)
                 
                 return {
                     "status": "SUCCESS", 

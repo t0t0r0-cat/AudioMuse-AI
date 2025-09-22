@@ -315,18 +315,33 @@
             if (cleanInterval) clearInterval(cleanInterval);
             
             cleanInterval = setInterval(async () => {
-                if (!currentTaskId) return;
+                if (!currentTaskId) {
+                    // FORCE STOP: If no current task, immediately clear interval and return
+                    clearInterval(cleanInterval);
+                    cleanInterval = null;
+                    return;
+                }
                 
                 try {
                     const response = await fetch(`/api/status/${currentTaskId}`);
-                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                    if (!response.ok) {
+                        // If response is not ok, stop polling
+                        console.log('Status API returned error, stopping polling');
+                        clearInterval(cleanInterval);
+                        cleanInterval = null;
+                        currentTaskId = null;
+                        startTime = null;
+                        return;
+                    }
                     
                     const data = await response.json();
                     
-                    // Check if task is finished and stop timer BEFORE updating status
+                    // Check if task is finished and FORCE STOP timer BEFORE updating status
                     if (['SUCCESS', 'FAILURE', 'REVOKED'].includes(data.status)) {
+                        console.log(`Task ${data.status}, FORCE STOPPING timer and polling`);
                         clearInterval(cleanInterval);
-                        // Clear timer immediately to stop counting
+                        cleanInterval = null;
+                        // Clear timer variables immediately to stop counting
                         currentTaskId = null;
                         startTime = null;
                     }
@@ -344,6 +359,11 @@
                     }
                 } catch (error) {
                     console.error('Error polling status:', error);
+                    // On error, also stop polling
+                    clearInterval(cleanInterval);
+                    cleanInterval = null;
+                    currentTaskId = null;
+                    startTime = null;
                 }
             }, 2000);
         }
@@ -356,8 +376,8 @@
             document.getElementById('progress-bar').style.width = `${data.progress || 0}%`;
             document.getElementById('status-message').textContent = data.details?.status_message || 'N/A';
             
-            // Update running time
-            if (startTime) {
+            // FORCE STOP timer updates if task is completed or startTime is null
+            if (startTime && !['SUCCESS', 'FAILURE', 'REVOKED'].includes(stateUpper)) {
                 const elapsed = Math.floor((Date.now() - startTime) / 1000);
                 const hours = Math.floor(elapsed / 3600);
                 const minutes = Math.floor((elapsed % 3600) / 60);
@@ -365,7 +385,8 @@
                 document.getElementById('status-running-time').textContent = 
                     `${hours.toString().padStart(2, '0')} : ${minutes.toString().padStart(2, '0')} : ${seconds.toString().padStart(2, '0')}`;
             } else {
-                // If no active startTime, don't update the running time (keeps last known time)
+                // FORCE STOP: If task is completed or no startTime, DON'T update running time
+                console.log('Timer update stopped - task completed or no startTime');
             }
             
             // Update details - backend handles log truncation
@@ -454,11 +475,15 @@
 
         function resetUI() {
             resetCleaningUI();
-            if (cleanInterval) clearInterval(cleanInterval);
+            if (cleanInterval) {
+                clearInterval(cleanInterval);
+                cleanInterval = null;
+            }
             currentTaskId = null;
             startTime = null;
             cleanStatusDisplay.style.display = 'none';
             cleaningResults.style.display = 'none';
+            console.log('UI completely reset - all timers and intervals cleared');
         }
     </script>
     <script src="/static/menu.js"></script>
