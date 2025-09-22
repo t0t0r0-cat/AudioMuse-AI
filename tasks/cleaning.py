@@ -19,6 +19,7 @@ from config import (
 
 # Import other project modules
 from .mediaserver import get_recent_albums, get_tracks_from_album
+from .voyager_manager import build_and_store_voyager_index
 
 from psycopg2 import OperationalError
 from redis.exceptions import TimeoutError as RedisTimeoutError
@@ -42,7 +43,7 @@ def identify_and_clean_orphaned_albums_task():
             "message": "Starting orphaned album identification...", 
             "log": [f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Orphaned album identification task started."]
         }
-        save_task_status(current_task_id, "cleaning_identify", TASK_STATUS_STARTED, progress=0, details=initial_details)
+        save_task_status(current_task_id, "cleaning", TASK_STATUS_STARTED, progress=0, details=initial_details)
         current_progress = 0
         current_task_logs = initial_details["log"]
 
@@ -63,7 +64,7 @@ def identify_and_clean_orphaned_albums_task():
             if current_job:
                 current_job.meta.update({'progress': progress, 'status_message': message, 'details': details})
                 current_job.save_meta()
-            save_task_status(current_task_id, "cleaning_identify", task_state, progress=progress, details=details)
+            save_task_status(current_task_id, "cleaning", task_state, progress=progress, details=details)
 
         try:
             log_and_update_main("🔍 Starting orphaned album identification...", 5)
@@ -73,8 +74,19 @@ def identify_and_clean_orphaned_albums_task():
             all_media_server_albums = get_recent_albums(0)  # 0 means fetch all albums
             
             if not all_media_server_albums:
-                log_and_update_main("⚠️ No albums found on media server.", 100, task_state=TASK_STATUS_SUCCESS)
-                return {"status": "SUCCESS", "message": "No albums found on media server.", "orphaned_albums": []}
+                log_and_update_main("⚠️ No albums found on media server.", 95, task_state=TASK_STATUS_PROGRESS)
+                # Still rebuild voyager index even when no albums found
+                log_and_update_main(f"🔄 Rebuilding voyager index...", 98)
+                try:
+                    build_and_store_voyager_index(get_db())
+                    log_and_update_main(f"✅ Voyager index rebuilt successfully.", 99)
+                except Exception as e:
+                    logger.warning(f"Failed to rebuild voyager index: {e}")
+                    log_and_update_main(f"⚠️ Warning: Failed to rebuild voyager index: {str(e)}", 99)
+                
+                summary = {"status": "SUCCESS", "message": "No albums found on media server.", "orphaned_albums": [], "deleted_count": 0}
+                log_and_update_main("✅ Database cleaning completed - no albums on media server!", 100, task_state=TASK_STATUS_SUCCESS, final_summary_details=summary)
+                return summary
             
             log_and_update_main(f"📊 Found {len(all_media_server_albums)} albums on media server", 20)
             
@@ -146,10 +158,17 @@ def identify_and_clean_orphaned_albums_task():
             orphaned_albums_list.sort(key=lambda x: x["track_count"], reverse=True)
             
             if len(orphaned_track_ids) == 0:
-                log_and_update_main("✅ No orphaned tracks found. Database is clean!", 100, task_state=TASK_STATUS_SUCCESS)
-                return {
-                    "status": "SUCCESS", 
-                    "message": "No orphaned tracks found. Database is clean!",
+                log_and_update_main("✅ No orphaned tracks found. Database is clean!", 95, task_state=TASK_STATUS_PROGRESS)
+                # Still rebuild voyager index even when no cleaning needed
+                log_and_update_main(f"🔄 Rebuilding voyager index...", 98)
+                try:
+                    build_and_store_voyager_index(get_db())
+                    log_and_update_main(f"✅ Voyager index rebuilt successfully.", 99)
+                except Exception as e:
+                    logger.warning(f"Failed to rebuild voyager index: {e}")
+                    log_and_update_main(f"⚠️ Warning: Failed to rebuild voyager index: {str(e)}", 99)
+                
+                summary = {
                     "total_media_server_albums": len(all_media_server_albums),
                     "total_media_server_tracks": len(media_server_track_ids),
                     "total_database_tracks": len(database_track_ids),
@@ -157,8 +176,15 @@ def identify_and_clean_orphaned_albums_task():
                     "orphaned_albums_count": 0,
                     "deleted_count": 0
                 }
+                
+                log_and_update_main("✅ Database cleaning completed - no orphaned tracks found!", 100, task_state=TASK_STATUS_SUCCESS, final_summary_details=summary)
+                return {
+                    "status": "SUCCESS", 
+                    "message": "No orphaned tracks found. Database is clean!",
+                    **summary
+                }
             
-            log_and_update_main(f"🧹 Starting automatic deletion of {len(orphaned_track_ids)} orphaned tracks...", 95)
+            log_and_update_main(f"🧹 Starting automatic deletion of {len(orphaned_track_ids)} orphaned tracks...", 93)
             
             # Step 6: Automatically delete all orphaned tracks
             deletion_result = delete_orphaned_albums_sync(list(orphaned_track_ids))
@@ -176,6 +202,17 @@ def identify_and_clean_orphaned_albums_task():
             }
             
             if deletion_result["status"] == "SUCCESS":
+                log_and_update_main(f"✅ Successfully deleted {deletion_result['deleted_count']} orphaned tracks.", 96)
+                
+                # Rebuild voyager index after cleaning like analysis does
+                log_and_update_main(f"🔄 Rebuilding voyager index after cleaning...", 98)
+                try:
+                    build_and_store_voyager_index(get_db())
+                    log_and_update_main(f"✅ Voyager index rebuilt successfully after cleaning.", 99)
+                except Exception as e:
+                    logger.warning(f"Failed to rebuild voyager index after cleaning: {e}")
+                    log_and_update_main(f"⚠️ Warning: Failed to rebuild voyager index: {str(e)}", 99)
+                
                 log_and_update_main(
                     f"✅ Cleaning complete! Identified and deleted {len(orphaned_albums_list)} orphaned albums ({deletion_result['deleted_count']} tracks).", 
                     100, 
