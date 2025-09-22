@@ -480,6 +480,7 @@ These parameter can be leave as it is:
 | Parameter               | Description                                 | Default Value                       |
 | ----------------------- | ------------------------------------------- | ----------------------------------- |
 | `TEMP_DIR`              | Temp directory for audio files              | `/app/temp_audio`                   |
+| `CLEANING_SAFETY_LIMIT` | Max number of albums deleted during cleaning | `100`                             |
 
 
 This are the default parameters on wich the analysis or clustering task will be lunched. You will be able to change them to another value directly in the front-end:
