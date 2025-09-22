@@ -103,7 +103,14 @@ TASK_STATUS_REVOKED = "REVOKED"
 def get_db():
     if 'db' not in g:
         try:
-            g.db = psycopg2.connect(DATABASE_URL, connect_timeout=15) # 15-second connection timeout
+            g.db = psycopg2.connect(
+                DATABASE_URL, 
+                connect_timeout=30,        # Time to establish connection (increased from 15)
+                keepalives_idle=600,       # Start keepalives after 10 min idle
+                keepalives_interval=30,    # Send keepalive every 30 sec
+                keepalives_count=3,        # 3 failed keepalives = dead connection
+                options='-c statement_timeout=300000'  # 5 min query timeout (300 seconds)
+            )
         except psycopg2.OperationalError as e:
             app.logger.error(f"Failed to connect to database: {e}") # Use app.logger for Flask context
             raise # Re-raise to ensure the operation that needed the DB fails clearly

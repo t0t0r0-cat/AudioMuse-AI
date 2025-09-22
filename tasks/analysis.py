@@ -182,7 +182,17 @@ def robust_load_audio_with_fallback(file_path, target_sr=16000):
     temp_wav_path = None
     try:
         # Check the audio content with pydub before converting
-        audio_segment = AudioSegment.from_file(file_path)
+        # Use more robust parameters for problematic codecs
+        audio_segment = AudioSegment.from_file(
+            file_path,
+            # Add parameters to help with codec detection issues
+            parameters=[
+                "-analyzeduration", "10M",  # Increase analysis duration
+                "-probesize", "10M",        # Increase probe size  
+                "-ignore_unknown",          # Ignore unknown streams
+                "-err_detect", "ignore_err" # Ignore decode errors
+            ]
+        )
         if len(audio_segment) == 0:
             logger.error(f"Pydub loaded a zero-duration audio segment from {os.path.basename(file_path)}. The file is likely corrupt or empty.")
             return None, None
@@ -195,7 +205,16 @@ def robust_load_audio_with_fallback(file_path, target_sr=16000):
         # This is critical for handling very large source files without running out of memory.
         logger.info(f"Fallback: Pre-processing {os.path.basename(file_path)} to a smaller WAV for safe loading...")
         processed_segment = audio_segment.set_frame_rate(target_sr).set_channels(1)
-        processed_segment.export(temp_wav_path, format="wav")
+        # Use more robust export parameters
+        processed_segment.export(
+            temp_wav_path, 
+            format="wav",
+            parameters=[
+                "-codec:a", "pcm_s16le",  # Fix the typo: was pcm_s0le, should be pcm_s16le
+                "-ar", str(target_sr),    # Set sample rate explicitly
+                "-ac", "1"                # Set mono explicitly
+            ]
+        )
         
         logger.info(f"Fallback: Converted {os.path.basename(file_path)} to temporary WAV for robust loading.")
         
