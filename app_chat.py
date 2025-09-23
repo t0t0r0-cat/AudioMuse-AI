@@ -16,10 +16,11 @@ logger = logging.getLogger(__name__)
 from config import (
     OLLAMA_SERVER_URL, OLLAMA_MODEL_NAME,
     GEMINI_MODEL_NAME, GEMINI_API_KEY, # Import GEMINI_API_KEY from config
+    MISTRAL_MODEL_NAME, MISTRAL_API_KEY,
     AI_MODEL_PROVIDER, # Default AI provider
     AI_CHAT_DB_USER_NAME, AI_CHAT_DB_USER_PASSWORD, # Import new config
 )
-from ai import get_gemini_playlist_name, get_ollama_playlist_name # Import functions to call AI
+from ai import get_gemini_playlist_name, get_ollama_playlist_name, get_mistral_playlist_name # Import functions to call AI
 
 # Create a Blueprint for chat-related routes
 chat_bp = Blueprint('chat_bp', __name__,
@@ -184,6 +185,9 @@ def chat_home():
                             'default_gemini_model_name': {
                                 'type': 'string', 'example': 'gemini-2.5-pro'
                             },
+                            'default_mistral_model_name': {
+                                'type': 'string', 'example': 'ministral-3b-latest'
+                            },
                         }
                     }
                 }
@@ -201,6 +205,7 @@ def chat_config_defaults_api():
         "default_ollama_model_name": OLLAMA_MODEL_NAME,
         "ollama_server_url": OLLAMA_SERVER_URL, # Ollama server URL might be useful for display/info
         "default_gemini_model_name": GEMINI_MODEL_NAME,
+        "default_mistral_model_name": MISTRAL_MODEL_NAME,
     }), 200
 
 @chat_bp.route('/api/chatPlaylist', methods=['POST'])
@@ -223,9 +228,9 @@ def chat_config_defaults_api():
                         },
                         'ai_provider': {
                             'type': 'string',
-                            'description': 'The AI provider to use (OLLAMA, GEMINI, NONE). Defaults to server config.',
+                            'description': 'The AI provider to use (OLLAMA, GEMINI, MISTRAL, NONE). Defaults to server config.',
                             'example': 'GEMINI',
-                            'enum': ['OLLAMA', 'GEMINI', 'NONE']
+                            'enum': ['OLLAMA', 'GEMINI', "MISTRAL", 'NONE']
                         },
                         'ai_model': {
                             'type': 'string',
@@ -240,6 +245,10 @@ def chat_config_defaults_api():
                         'gemini_api_key': {
                             'type': 'string',
                             'description': 'Custom Gemini API key (optional, defaults to server configuration).',
+                        },
+                        'mistral_api_key': {
+                            'type': 'string',
+                            'description': 'Custom Mistral API key (optional, defaults to server configuration).',
                         }
                     }
                 }
@@ -323,6 +332,8 @@ def chat_playlist_api():
     data_for_log = dict(data) if data else {}
     if 'gemini_api_key' in data_for_log and data_for_log['gemini_api_key']:
         data_for_log['gemini_api_key'] = 'API-KEY' # Masked
+    if 'mistral_api_key' in data_for_log and data_for_log['mistral_api_key']:
+        data_for_log['mistral_api_key'] = 'API-KEY' # Masked
     logger.debug("chat_playlist_api called. Raw request data: %s", data_for_log)
 
     from app import get_db # Import get_db here, inside the function
@@ -501,7 +512,7 @@ Original full prompt context (for reference):
             current_prompt_for_ai = base_expert_playlist_creator_prompt.replace("{user_input_placeholder}", original_user_input)
 
         raw_sql_from_ai_this_attempt = None
-        # --- Call AI (Ollama/Gemini) ---
+        # --- Call AI (Ollama/Gemini/Mistral) ---
         if ai_provider == "OLLAMA":
             actual_model_used = ai_model_from_request or OLLAMA_MODEL_NAME
             ollama_url_from_request = data.get('ollama_server_url', OLLAMA_SERVER_URL)
@@ -527,6 +538,24 @@ Original full prompt context (for reference):
             raw_sql_from_ai_this_attempt = get_gemini_playlist_name(gemini_api_key_from_request, actual_model_used, current_prompt_for_ai)
             if raw_sql_from_ai_this_attempt.startswith("Error:"):
                 ai_response_message += f"Gemini API Error: {raw_sql_from_ai_this_attempt}\n"
+                last_error_for_retry = raw_sql_from_ai_this_attempt
+                raw_sql_from_ai_this_attempt = None
+
+        elif ai_provider == "MISTRAL":
+            actual_model_used = ai_model_from_request or MISTRAL_MODEL_NAME
+            # MODIFIED: Get API key from request, but fall back to server config if not provided.
+            mistral_api_key_from_request = data.get('mistral_api_key') or MISTRAL_API_KEY
+            if not mistral_api_key_from_request or mistral_api_key_from_request == "YOUR-MISTRAL-API-KEY-HERE":
+                error_msg = "Error: Mistral API key is missing. Please provide a valid API key or set it in the server configuration."
+                ai_response_message += error_msg + "\n"
+                if attempt_num == 0:
+                    return jsonify({"response": {"message": ai_response_message, "original_request": original_user_input, "ai_provider_used": ai_provider, "ai_model_selected": actual_model_used, "executed_query": None, "query_results": None}}), 400
+                last_error_for_retry = error_msg
+                break
+            ai_response_message += f"Processing with MISTRAL model: {actual_model_used}.\n"
+            raw_sql_from_ai_this_attempt = get_mistral_playlist_name(mistral_api_key_from_request, actual_model_used, current_prompt_for_ai)
+            if raw_sql_from_ai_this_attempt.startswith("Error:"):
+                ai_response_message += f"Mistral API Error: {raw_sql_from_ai_this_attempt}\n"
                 last_error_for_retry = raw_sql_from_ai_this_attempt
                 raw_sql_from_ai_this_attempt = None
 

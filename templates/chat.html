@@ -40,6 +40,7 @@
                                     <option value="NONE">None</option>
                                     <option value="OLLAMA">Ollama</option>
                                     <option value="GEMINI">Gemini</option>
+                                    <option value="MISTRAL">Mistral</option>
                                 </select>
                             </div>
                             <div id="ollamaConfig" class="hidden">
@@ -51,9 +52,13 @@
                                 </div>
                             </div>
                             <!-- REMOVED: The Gemini API Key input field is removed as it should not be sent from the frontend -->
-                            <div id="geminiConfig" class="hidden">
+                            <div id="<geminiConfig" class="hidden">
                                 <label for="geminiModel">Gemini Model</label>
                                 <input type="text" id="geminiModel" placeholder="e.g., gemini-2.5-pro">
+                            </div>
+                            <div id="mistralConfig" class="hidden">
+                                <label for="mistralModel">Mistral Model</label>
+                                <input type="text" id="mistralModel" placeholder="e.g., ministral-3b-latest">
                             </div>
                         </div>
                     </fieldset>
@@ -108,9 +113,11 @@
             const aiProviderSelect = document.getElementById('aiProvider');
             const ollamaConfigDiv = document.getElementById('ollamaConfig');
             const geminiConfigDiv = document.getElementById('geminiConfig');
+            const mistralConfigDiv = document.getElementById('mistralConfig');
             const ollamaModelSelect = document.getElementById('ollamaModel');
             const ollamaServerUrlInput = document.getElementById('ollamaServerUrl'); // Added Ollama Server URL input
             const geminiModelSelect = document.getElementById('geminiModel');
+            const mistralModelSelect = document.getElementById('mistralModel');
             const playlistForm = document.getElementById('playlistForm');
             const userInput = document.getElementById('userInput');
             const submitButton = document.getElementById('submitChat');
@@ -153,6 +160,7 @@
                 ollamaServerUrlInput.value = globalConfig.ollama_server_url || "http://localhost:11434/api/generate"; // Pre-fill Ollama Server URL
                 
                 geminiModelSelect.value = globalConfig.default_gemini_model_name || "gemini-2.5-pro";
+                mistralModelSelect.value = globalConfig.default_mistral_model_name || "ministral-3b-latest";
             }
 
             /**
@@ -164,12 +172,19 @@
                 if (provider === 'OLLAMA') {
                     ollamaConfigDiv.classList.remove('hidden');
                     geminiConfigDiv.classList.add('hidden');
+                    mistralConfigDiv.classList.add('hidden');
                 } else if (provider === 'GEMINI') {
                     ollamaConfigDiv.classList.add('hidden');
                     geminiConfigDiv.classList.remove('hidden');
+                    mistralConfigDiv.classList.add('hidden');
+                } else if (provider === 'MISTRAL') {
+                    ollamaConfigDiv.classList.add('hidden');
+                    geminiConfigDiv.classList.add('hidden');
+                    mistralConfigDiv.classList.remove('hidden');
                 } else {
                     ollamaConfigDiv.classList.add('hidden');
                     geminiConfigDiv.classList.add('hidden');
+                    mistralConfigDiv.classList.add('hidden');
                 }
             }
 
@@ -199,6 +214,8 @@
                 } else if (payload.ai_provider === 'GEMINI') {
                     payload.ai_model = geminiModelSelect.value;
                     // REMOVED: The API key is no longer sent from the frontend
+                } else if (payload.ai_provider === 'MISTRAL') {
+                    payload.ai_model = mistralModelSelect.value;
                 }
                 try {
                     const response = await fetch('/chat/api/chatPlaylist', {

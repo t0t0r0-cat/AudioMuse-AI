@@ -17,6 +17,7 @@ const spectralParamsDiv = document.getElementById('spectral-params'); // New ref
 const aiModelProviderSelect = document.getElementById('config-ai_model_provider');
 const ollamaConfigGroup = document.getElementById('ollama-config-group');
 const geminiConfigGroup = document.getElementById('gemini-config-group');
+const mistralConfigGroup = document.getElementById('mistral-config-group');
 
 // Task Buttons
 const startAnalysisBtn = document.getElementById('start-analysis-btn');
@@ -157,6 +158,7 @@ function renderConfig(config) {
     document.getElementById('config-ollama_server_url').value = config.ollama_server_url || 'http://127.0.0.1:11434/api/generate';
     document.getElementById('config-ollama_model_name').value = config.ollama_model_name || 'mistral:7b';
     document.getElementById('config-gemini_model_name').value = config.gemini_model_name || 'gemini-2.5-pro';
+    document.getElementById('config-mistral_model_name').value = config.mistral_model_name || 'ministral-3b-latest';
 }
 
 function toggleClusteringParams() {
@@ -189,11 +191,14 @@ function toggleAiConfig() {
     const provider = aiModelProviderSelect.value;
     ollamaConfigGroup.classList.add('hidden');
     geminiConfigGroup.classList.add('hidden');
+    mistralConfigGroup.classList.add('hidden');
 
     if (provider === 'OLLAMA') {
         ollamaConfigGroup.classList.remove('hidden');
     } else if (provider === 'GEMINI') {
         geminiConfigGroup.classList.remove('hidden');
+    } else if (provider === 'MISTRAL') {
+        mistralConfigGroup.classList.remove('hidden');
     }
 }
 
@@ -382,6 +387,7 @@ async function startTask(taskType) {
             ollama_server_url: document.getElementById('config-ollama_server_url').value,
             ollama_model_name: document.getElementById('config-ollama_model_name').value,
             gemini_model_name: document.getElementById('config-gemini_model_name').value,
+            mistral_model_name: document.getElementById('config-mistral_model_name').value,
             enable_clustering_embeddings: document.getElementById('config-enable_clustering_embeddings').checked
         });
     }

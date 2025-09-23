@@ -33,8 +33,8 @@ from config import JELLYFIN_URL, JELLYFIN_USER_ID, JELLYFIN_TOKEN, HEADERS, TEMP
     DBSCAN_MIN_SAMPLES_MIN, DBSCAN_MIN_SAMPLES_MAX, GMM_N_COMPONENTS_MIN, GMM_N_COMPONENTS_MAX, \
     SPECTRAL_N_CLUSTERS_MIN, SPECTRAL_N_CLUSTERS_MAX, ENABLE_CLUSTERING_EMBEDDINGS, \
     PCA_COMPONENTS_MIN, PCA_COMPONENTS_MAX, CLUSTERING_RUNS, MOOD_LABELS, TOP_N_MOODS, APP_VERSION, \
-    AI_MODEL_PROVIDER, OLLAMA_SERVER_URL, OLLAMA_MODEL_NAME, GEMINI_API_KEY, GEMINI_MODEL_NAME, TOP_N_PLAYLISTS, \
-    PATH_DISTANCE_METRIC # --- NEW: Import path distance metric ---
+    AI_MODEL_PROVIDER, OLLAMA_SERVER_URL, OLLAMA_MODEL_NAME, GEMINI_API_KEY, GEMINI_MODEL_NAME, MISTRAL_MODEL_NAME, \
+    TOP_N_PLAYLISTS, PATH_DISTANCE_METRIC  # --- NEW: Import path distance metric ---
 
 # NOTE: Annoy Manager import is moved to be local where used to prevent circular imports.
 
@@ -974,6 +974,7 @@ def get_config_endpoint():
         "ai_model_provider": AI_MODEL_PROVIDER,
         "ollama_server_url": OLLAMA_SERVER_URL, "ollama_model_name": OLLAMA_MODEL_NAME,
         "gemini_model_name": GEMINI_MODEL_NAME,
+        "mistral_model_name": MISTRAL_MODEL_NAME,
         "top_n_moods": TOP_N_MOODS, "mood_labels": MOOD_LABELS, "clustering_runs": CLUSTERING_RUNS,
         "top_n_playlists": TOP_N_PLAYLISTS,
         "enable_clustering_embeddings": ENABLE_CLUSTERING_EMBEDDINGS,
