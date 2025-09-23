@@ -75,6 +75,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
       flasgger \
       sqlglot \
       google-generativeai \
+      mistralai \
       pydub \
       "$(if [[ "$TARGETARCH" = "arm64" ]]; then \
         echo "tensorflow-aarch64==2.15.0"; \
