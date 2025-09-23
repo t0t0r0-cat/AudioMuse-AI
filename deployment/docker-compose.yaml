@@ -46,6 +46,7 @@ services:
       POSTGRES_PORT: "5432"
       REDIS_URL: "redis://redis:6379/0" # Connects to the 'redis' service
       GEMINI_API_KEY: "YOUR_GEMINI_API_KEY_HERE" # From gemini-api-credentials secret
+      MISTRAL_API_KEY: "YOUR_MISTRAL_API_KEY_HERE" # From mistral-api-credentials secret
       TEMP_DIR: "/app/temp_audio"
     volumes:
       - temp-audio-flask:/app/temp_audio # Volume for temporary audio files
@@ -72,6 +73,7 @@ services:
       POSTGRES_PORT: "5432"
       REDIS_URL: "redis://redis:6379/0" # Connects to the 'redis' service
       GEMINI_API_KEY: "YOUR_GEMINI_API_KEY_HERE" # From gemini-api-credentials secret
+      MISTRAL_API_KEY: "YOUR_MISTRAL_API_KEY_HERE"
       TEMP_DIR: "/app/temp_audio"
     volumes:
       - temp-audio-worker:/app/temp_audio # Volume for temporary audio files
