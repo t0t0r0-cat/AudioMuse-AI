@@ -1073,6 +1073,7 @@ from app_sonic_fingerprint import sonic_fingerprint_bp
 from app_path import path_bp
 from app_collection import collection_bp
 from app_external import external_bp # --- NEW: Import the external blueprint ---
+from app_universe import universe_bp # --- NEW: Import the universe blueprint ---
 
 app.register_blueprint(chat_bp, url_prefix='/chat')
 app.register_blueprint(clustering_bp)
@@ -1082,6 +1083,7 @@ app.register_blueprint(sonic_fingerprint_bp)
 app.register_blueprint(path_bp)
 app.register_blueprint(collection_bp)
 app.register_blueprint(external_bp, url_prefix='/external') # --- NEW: Register the external blueprint ---
+app.register_blueprint(universe_bp) # --- NEW: Register the universe blueprint ---
 
 if __name__ == '__main__':
     os.makedirs(TEMP_DIR, exist_ok=True)
