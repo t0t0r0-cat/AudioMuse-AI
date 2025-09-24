@@ -15,7 +15,7 @@ from config import JELLYFIN_URL, JELLYFIN_USER_ID, JELLYFIN_TOKEN, HEADERS, TEMP
     SPECTRAL_N_CLUSTERS_MIN, SPECTRAL_N_CLUSTERS_MAX, ENABLE_CLUSTERING_EMBEDDINGS, \
     PCA_COMPONENTS_MIN, PCA_COMPONENTS_MAX, CLUSTERING_RUNS, MOOD_LABELS, TOP_N_MOODS, \
     AI_MODEL_PROVIDER, OLLAMA_SERVER_URL, OLLAMA_MODEL_NAME, GEMINI_API_KEY, GEMINI_MODEL_NAME, \
-    TOP_N_PLAYLISTS # *** NEW: Import the default for Top N Playlists ***
+    TOP_N_PLAYLISTS, MISTRAL_API_KEY, MISTRAL_MODEL_NAME  # *** NEW: Import the default for Top N Playlists ***
 
 # RQ import
 from rq import Retry
@@ -177,7 +177,7 @@ def start_clustering_endpoint():
                 default: "Configured MAX_SONGS_PER_CLUSTER"
               ai_model_provider:
                 type: string
-                description: AI provider for playlist naming (OLLAMA, GEMINI, NONE).
+                description: AI provider for playlist naming (OLLAMA, GEMINI, MISTRAL, NONE).
                 default: "Configured AI_MODEL_PROVIDER"
               ollama_server_url:
                 type: string
@@ -198,6 +198,15 @@ def start_clustering_endpoint():
                 description: Override for the Gemini model name for this run.
                 nullable: true
                 default: "Defaults to server-configured GEMINI_MODEL_NAME"
+              mistral_api_key:
+                type: string
+                description: Override for the Mistral API key for this run (optional, defaults to server configuration).
+                nullable: true
+              mistral_model_name:
+                type: string
+                description: Override for the Mistral model name for this run.
+                nullable: true
+                default: "Defaults to server-configured MISTRAL_MODEL_NAME"
               top_n_moods:
                 type: integer
                 description: Number of top moods to consider for clustering feature vectors (uses the first N from global MOOD_LABELS).
@@ -308,6 +317,8 @@ def start_clustering_endpoint():
             # This line already falls back to the config value if the request doesn't contain it.
             "gemini_api_key_param": data.get('gemini_api_key', GEMINI_API_KEY),
             "gemini_model_name_param": data.get('gemini_model_name', GEMINI_MODEL_NAME),
+            "mistral_api_key_param": data.get('mistral_api_key', MISTRAL_API_KEY),
+            "mistral_model_name_param": data.get('mistral_model_name', MISTRAL_MODEL_NAME),
             "top_n_moods_for_clustering_param": int(data.get('top_n_moods', TOP_N_MOODS)),
             "enable_clustering_embeddings_param": data.get('enable_clustering_embeddings', ENABLE_CLUSTERING_EMBEDDINGS),
         },

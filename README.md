@@ -126,13 +126,14 @@ gemini:
   apiKey: "YOUR_GEMINI_API_KEY_HERE" # IMPORTANT: Change this for production
 
 # AI Configuration
-# You can use "OLLAMA", "GEMINI", or "NONE" (some features will be disabled if NONE)
+# You can use "OLLAMA", "GEMINI", MISTRAL or "NONE" (some features will be disabled if NONE)
 config:
   mediaServerType: "jellyfin"
-  aiModelProvider: "NONE" # Options: "GEMINI", "OLLAMA", or "NONE"
+  aiModelProvider: "NONE" # Options: "GEMINI", "OLLAMA", MISTRAL or "NONE"
   ollamaServerUrl: "http://192.168.3.15:11434/api/generate"
   ollamaModelName: "mistral:7b"
   geminiModelName: "gemini-2.5-pro"
+  mistralModelName: "ministral-3b-latest"
   aiChatDbUserName: "ai_user" # Must match postgres.aiChatDbUser
 ```
 
@@ -163,7 +164,9 @@ navidrome:
 
 gemini:
   apiKey: "YOUR_GEMINI_API_KEY_HERE" # IMPORTANT: Change this for production
-
+  
+mistral:
+  apiKey: "YOUR_MISTRAL_API_KEY_HERE"
 # AI Configuration
 # You can use "OLLAMA", "GEMINI", or "NONE" (some features will be disabled if NONE)
 config:
@@ -172,6 +175,7 @@ config:
   ollamaServerUrl: "http://192.168.3.15:11434/api/generate"
   ollamaModelName: "mistral:7b"
   geminiModelName: "gemini-2.5-pro"
+  mistralModelName: "ministral-3b-latest"
   aiChatDbUserName: "ai_user" # Must match postgres.aiChatDbUser
 ```
 
@@ -199,6 +203,7 @@ This section provides a minimal guide to deploy AudioMuse-AI on a K3S (Kubernete
             *   `jellyfin-credentials`: Update `api_token` and `user_id`.
             *   `postgres-credentials`: Update `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_DB`.
             *   `gemini-api-credentials` (if using Gemini for AI Naming): Update `GEMINI_API_KEY`.
+            *   `mistral-api-credentials` (if using Mistral for AI Naming): Update `MISTRAL_API_KEY`.
         *   **ConfigMap (`audiomuse-ai-config`):**
             *   Update `JELLYFIN_URL`.
             *   Ensure `POSTGRES_HOST`, `POSTGRES_PORT`, and `REDIS_URL` are correct for your setup (defaults are for in-cluster services).
@@ -220,6 +225,7 @@ In case you want to deploy AudioMuse-AI on K3S but interacting with Navidrome th
             *   `navidrome-credentials`: Update `NAVIDROME_USER` and `NAVIDROME_PASSWORD`.
             *   `postgres-credentials`: Update `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_DB`.
             *   `gemini-api-credentials` (if using Gemini for AI Naming): Update `GEMINI_API_KEY`.
+            *   `mistral-api-credentials` (if using Mistral for AI Naming): Update `MISTRAL_API_KEY`.
         *   **ConfigMap (`audiomuse-ai-config`):**
             *   Update `NAVIDROME_URL`.
             *   Ensure `POSTGRES_HOST`, `POSTGRES_PORT`, and `REDIS_URL` are correct for your setup (defaults are for in-cluster services).
@@ -276,7 +282,7 @@ After deploying with the K3S Quick Start, you'll want to run an **Analysis Task*
     *   If you want to limit the maximum number of songs in any single generated playlist, set this to a positive number (e.g., `20`, `30`). In the case of limitation is set, the algorithm will split the playlist in two or more.
 
 6.  **AI Playlist Naming (`AI_MODEL_PROVIDER`)** (Default: `NONE`)
-    *   If you've configured Ollama or Gemini (see `GEMINI_API_KEY` in secrets, and `OLLAMA_SERVER_URL` in the ConfigMap), you can set this to `OLLAMA` or `GEMINI` to get AI-generated playlist names. Otherwise, playlists will have names like "Rock_Fast_Automatic". For a first run you can keep it as `NONE`.
+    *   If you've configured Ollama, Gemini or Mistral (see `GEMINI_API_KEY` or `MISTRAL_API_KEY`  in secrets, and `OLLAMA_SERVER_URL` in the ConfigMap), you can set this to `OLLAMA`,  `GEMINI` or `MISTRAL` to get AI-generated playlist names. Otherwise, playlists will have names like "Rock_Fast_Automatic". For a first run you can keep it as `NONE`.
 
 **To run your first tasks:**
 *   Go to the UI (`http://<EXTERNAL-IP>:8000`).
@@ -287,7 +293,7 @@ After deploying with the K3S Quick Start, you'll want to run an **Analysis Task*
 
 **IMPORTANT:** before use this function you need to run the Analysis task first from the normal (async) UI.
 
-For a quick and interactive way to generate playlists without running the full evolutionary clustering task, you can use the "Instant Playlist" chat interface. This feature leverages AI (Ollama or Gemini, if configured) to translate your natural language requests directly into SQL queries that are run against your analyzed music data.
+For a quick and interactive way to generate playlists without running the full evolutionary clustering task, you can use the "Instant Playlist" chat interface. This feature leverages AI (Ollama, Gemini or Mistral, if configured) to translate your natural language requests directly into SQL queries that are run against your analyzed music data.
 
 **How to Use:**
 
@@ -295,9 +301,9 @@ For a quick and interactive way to generate playlists without running the full e
     *   Navigate to `http://<EXTERNAL-IP>:8000/chat` (or `http://localhost:8000/chat` for local Docker Compose deployments).
 
 2.  **Configure AI (Optional but Recommended):**
-    *   Select your preferred AI Provider (Ollama or Gemini).
+    *   Select your preferred AI Provider (Ollama, Gemini or Mistral).
     *   If using Ollama, ensure the "Ollama Server URL" and "Ollama Model" are correctly set (they will default to values from your server configuration).
-    *   If using Gemini, enter your "Gemini API Key" and select the "Gemini Model" (defaults are provided from server config).
+    *   If using Gemini or Mistral, enter your "API Key" and select the "Model" (defaults are provided from server config).
     *   If you select "None" as the AI Provider, the system will not attempt to generate SQL from your text.
 
 3.  **Make Your Request:**
@@ -419,6 +425,7 @@ The Quick Start provided in the `playlist` namespace the following resources (th
 *   **`jellyfin-credentials`**: Stores your sensitive Jellyfin `api_token` and `user_id`. **You must update this Secret with your actual values.**
 *   **`postgres-credentials`**: Stores the sensitive PostgreSQL `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_DB` credentials. **You must update this Secret with your actual values.**
 *   **`gemini-api-credentials`**: Stores your `GEMINI_API_KEY` if you configure the application to use Google Gemini for AI playlist naming. **Update this Secret if you plan to use Gemini.**
+*   **`mistral-api-credentials`**: Stores your `MISTRAL_API_KEY` if you configure the application to use Mistralfor AI playlist naming. **Update this Secret if you plan to use Mistral.**
 
 **ConfigMap (Non-Sensitive Configuration):**
 *   **`audiomuse-ai-config`**: Contains non-sensitive application parameters passed as environment variables. By default, this includes `JELLYFIN_URL`, `POSTGRES_HOST`, `POSTGRES_PORT`, and `REDIS_URL`. **You must update `JELLYFIN_URL` with your Jellyfin server's address.** Ensure `POSTGRES_HOST`, `POSTGRES_PORT`, and `REDIS_URL` match the internal service names if you modify the deployment structure.
@@ -458,23 +465,22 @@ These are the parameters accepted for this script. You can pass them as environm
 
 The **mandatory** parameter that you need to change from the example are this:
 
-| Parameter          | Description                                    | Default Value                     |
-|--------------------|------------------------------------------------|-----------------------------------|
-| `MEDIASERVER_TYPE` | (Required) jellyfin, navidrome, lyrion         | `jellyfin`    |
-| `JELLYFIN_URL`     | (Required) Your Jellyfin server's full URL     | `http://YOUR_JELLYFIN_IP:8096`    |
-| `JELLYFIN_USER_ID` | (Required) Jellyfin User ID.                   | *(N/A - from Secret)* |
-| `JELLYFIN_TOKEN`   | (Required) Jellyfin API Token.                 | *(N/A - from Secret)* |
-| `NAVIDROME_URL`     | (Required) Your Navidrome server's full URL    | `http://YOUR_JELLYFIN_IP:4553`    |
-| `NAVIDROME_USER`    | (Required) Navidrome User ID.                  | *(N/A - from Secret)* |
-| `NAVIDROME_PASSWORD`| (Required) Navidrome user Password.            | *(N/A - from Secret)* |
-| `LYRION_URL`       | (Required) Your Lyrion server's full URL       | `http://YOUR_JELLYFIN_IP:9000`    |
-| `POSTGRES_USER`    | (Required) PostgreSQL username.                | *(N/A - from Secret)* | # Corrected typo
-| `POSTGRES_PASSWORD`| (Required) PostgreSQL password.                | *(N/A - from Secret)* |
-| `POSTGRES_DB`      | (Required) PostgreSQL database name.           | *(N/A - from Secret)* |
-| `POSTGRES_HOST`    | (Required) PostgreSQL host.                    | `postgres-service.playlist`       |
-| `POSTGRES_PORT`    | (Required) PostgreSQL port.                    | `5432`                            |
-| `REDIS_URL`        | (Required) URL for Redis.                      | `redis://localhost:6379/0`        |
-| `GEMINI_API_KEY`   | (Required if `AI_MODEL_PROVIDER` is GEMINI) Your Google Gemini API Key. | *(N/A - from Secret)* |
+| Parameter            | Description                                                             | Default Value                     |
+|----------------------|-------------------------------------------------------------------------|-----------------------------------|
+| `JELLYFIN_URL`       | (Required) Your Jellyfin server's full URL                              | `http://YOUR_JELLYFIN_IP:8096`    |
+| `JELLYFIN_USER_ID`   | (Required) Jellyfin User ID.                                            | *(N/A - from Secret)* |
+| `JELLYFIN_TOKEN`     | (Required) Jellyfin API Token.                                          | *(N/A - from Secret)* |
+| `NAVIDROME_URL`      | (Required) Your Navidrome server's full URL                             | `http://YOUR_JELLYFIN_IP:4553`    |
+| `NAVIDROME_USER`     | (Required) Navidrome User ID.                                           | *(N/A - from Secret)* |
+| `NAVIDROME_PASSWORD` | (Required) Navidrome user Password.                                     | *(N/A - from Secret)* |
+| `POSTGRES_USER`      | (Required) PostgreSQL username.                                         | *(N/A - from Secret)* | # Corrected typo
+| `POSTGRES_PASSWORD`  | (Required) PostgreSQL password.                                         | *(N/A - from Secret)* |
+| `POSTGRES_DB`        | (Required) PostgreSQL database name.                                    | *(N/A - from Secret)* |
+| `POSTGRES_HOST`      | (Required) PostgreSQL host.                                             | `postgres-service.playlist`       |
+| `POSTGRES_PORT`      | (Required) PostgreSQL port.                                             | `5432`                            |
+| `REDIS_URL`          | (Required) URL for Redis.                                               | `redis://localhost:6379/0`        |
+| `GEMINI_API_KEY`     | (Required if `AI_MODEL_PROVIDER` is GEMINI) Your Google Gemini API Key. | *(N/A - from Secret)* |
+| `MISTRAL_API_KEY`    | (Required if `AI_MODEL_PROVIDER` is MISTRAL) Your Mistral API Key.      | *(N/A - from Secret)* |
 
 These parameter can be leave as it is:
 
@@ -486,90 +492,91 @@ These parameter can be leave as it is:
 
 This are the default parameters on wich the analysis or clustering task will be lunched. You will be able to change them to another value directly in the front-end:
 
-| Parameter                                | Description                                                                  | Default Value                        |
-|------------------------------------------|------------------------------------------------------------------------------|--------------------------------------|
-| **Analysis General**                     |                                                                              |                                      | 
-| `NUM_RECENT_ALBUMS`                      | Number of recent albums to scan (0 for all).                                 | `0`                               |
-| `TOP_N_MOODS`                            | Number of top moods per track for feature vector.                            | `5`                                  |
-| **Clustering General**                   |                                                                              |                                      |
-| `ENABLE_CLUSTERING_EMBEDDINGS`           | Whether to use audio embeddings (True) or score-based features (False) for clustering. | `false`                              |
-| `CLUSTER_ALGORITHM`                      | Default clustering: `kmeans`, `dbscan`, `gmm`, `spectral`.                             | `kmeans`                             |
-| `MAX_SONGS_PER_CLUSTER`                  | Max songs per generated playlist segment.                                  | `0`                                  |
-| `MAX_SONGS_PER_ARTIST`                   | Max songs from one artist per cluster.                                     | `3`                                  |
-| `MAX_DISTANCE`                           | Normalized distance threshold for tracks in a cluster.                     | `0.5`                                |
-| `CLUSTERING_RUNS`                        | Iterations for Monte Carlo evolutionary search.                            | `5000`                               |
-| `TOP_N_PLAYLISTS`                        | POST Clustering it keep only the top N diverse playlist.                   | `8`                               |
-| **Similarity General**    |                                                                              |                                      |
-| `INDEX_NAME`                             | Name of the index, no need to change.                                      | `music_library`                      |
-| `VOYAGER_EF_CONSTRUCTION`                | Number of element analyzed to create the neighbor list in the index.       | `1024`                                 |
-| `VOYAGER_M`                              | Number of neighbore More  = higher accuracy.                               | `64`                                 |
-| `VOYAGER_QUERY_EF`                       | Number neighbor analyzed during the query.                                 | `1024`                                 |
-| `VOYAGER_METRIC`                           | Different tipe of distance metrics: `angular`, `euclidean`,`dot`         | `angular`              |
-| `SIMILARITY_ELIMINATE_DUPLICATES_DEFAULT` | It enable the possibility of use the `MAX_SONGS_PER_ARTIST` also in similar song  | `true`              |
-| **Sonic Fingerprint General**    |                                                                                    |                                      |
-| `SONIC_FINGERPRINT_NEIGHBORS`             | Default number of track for the sonic fingerprint                         | `100`                      |
-| **Similar Song and Song Path Duplicate filtering General** |                                                          |                                      |
-| `DUPLICATE_DISTANCE_THRESHOLD_COSINE`     | Less than this cosine distance the track is a duplicate.                  | `0.01`                      |
-| `DUPLICATE_DISTANCE_THRESHOLD_EUCLIDEAN`  | Less than this euclidean distance the track is a duplicate.               | `0.15`                      |
-| `DUPLICATE_DISTANCE_CHECK_LOOKBACK`       | How many previous song need to be checked for duplicate.                  | `1`                      |
-| **Song Path General**    |                                                                              |                                      |
-| `PATH_DISTANCE_METRIC`                 | The distance metric to use for pathfinding. Options: 'angular', 'euclidean'| `euclidean`   |
-| `PATH_DEFAULT_LENGTH`                  | Default number of songs in the path if not specified in the API request     | `25`          |
-| `PATH_AVG_JUMP_SAMPLE_SIZE`            | Number of random songs to sample for calculating the average jump distance  | `200`         |
-| `PATH_CANDIDATES_PER_STEP`             | Number of candidate songs to retrieve from Voyager for each step in the path| `25`          |
-| `PATH_LCORE_MULTIPLIER`             | It multiply the number of centroid created based on the distance. Higher is better for distant song and worst for nearest.| `3`          |
-| **Evolutionary Clustering & Scoring**    |                                                                              |                                      |
-| `ITERATIONS_PER_BATCH_JOB`               | Number of clustering iterations processed per RQ batch job.                | `20`                                |
-| `MAX_CONCURRENT_BATCH_JOBS`              | Maximum number of clustering batch jobs to run simultaneously.             | `10`                                  |
-| `TOP_K_MOODS_FOR_PURITY_CALCULATION`     | Number of centroid's top moods to consider when calculating playlist purity. | `3`                                  |
-| `EXPLOITATION_START_FRACTION`            | Fraction of runs before starting to use elites.                            | `0.2`                                |
-| `EXPLOITATION_PROBABILITY_CONFIG`        | Probability of mutating an elite vs. random generation.                | `0.7`                                |
-| `MUTATION_INT_ABS_DELTA`                 | Max absolute change for integer parameter mutation.                        | `3`                                  |
-| `MUTATION_FLOAT_ABS_DELTA`               | Max absolute change for float parameter mutation.                          | `0.05`                               |
-| `MUTATION_KMEANS_COORD_FRACTION`         | Fractional change for KMeans centroid coordinates.                       | `0.05`                               |
-| **K-Means Ranges**                       |                                                                              |                                      |
-| `NUM_CLUSTERS_MIN`                       | Min $K$ for K-Means.                                                       | `40`                                 |
-| `TOP_K_MOODS_FOR_PURITY_CALCULATION`     | Number of centroid's top moods to consider when calculating playlist purity. | `3`                                  |
-| `NUM_CLUSTERS_MAX`                       | Max $K$ for K-Means.                                                       | `100`                                |
-| `USE_MINIBATCH_KMEANS`                   | Whether to use MiniBatchKMeans (True) or standard KMeans (False) when clustering embeddings. | `false`                               |
-| **DBSCAN Ranges**                        |                                                                              |                                      |
-| `DBSCAN_EPS_MIN`                         | Min epsilon for DBSCAN.                                                    | `0.1`                                |
-| `DBSCAN_EPS_MAX`                         | Max epsilon for DBSCAN.                             d                       | `0.5`                                |
-| `DBSCAN_MIN_SAMPLES_MIN`                 | Min `min_samples` for DBSCAN.                                              | `5`                                  |
-| `DBSCAN_MIN_SAMPLES_MAX`                 | Max `min_samples` for DBSCAN.                                              | `20`                                 |
-| **GMM Ranges**                           |                                                                              |                                      |
-| `GMM_N_COMPONENTS_MIN`                   | Min components for GMM.                                                    | `40`                                 |
-| `GMM_N_COMPONENTS_MAX`                   | Max components for GMM.                                                    | `100`                                 |
-| `GMM_COVARIANCE_TYPE`                    | Covariance type for GMM (task uses `full`).                               | `full`                               |
-| **Spectral Ranges**                      |                                                                              |                                      |
-| `SPECTRAL_N_CLUSTERS_MIN`                | Min components for GMM.                                                    | `40`                                 |
-| `SPECTRAL_N_CLUSTERS_MAX`                | Max components for GMM.                                                    | `100`                                 |
-| `SPECTRAL_N_NEIGHBORS`                   | Number of Neighbors on which do clustering. Higher is better but slower    | `20`                               |
-| **PCA Ranges**                           |                                                                              |                                      |
-| `PCA_COMPONENTS_MIN`                     | Min PCA components (0 to disable).                                         | `0`                                  |
-| `PCA_COMPONENTS_MAX`                     | Max PCA components (e.g., `8` for feature vectors, `199` for embeddings).    | `8`                                  |
-| **AI Naming (*)**                        |                                                                              |                                      |
-| `AI_MODEL_PROVIDER`                      | AI provider: `OLLAMA`, `GEMINI`, or `NONE`.                                | `NONE`                               |
-| **Evolutionary Clustering & Scoring**    |                                                                              |                                      |
-| `TOP_N_ELITES`                           | Number of best solutions kept as elites.                                   | `10`                                 |
-| `SAMPLING_PERCENTAGE_CHANGE_PER_RUN`     | Percentage of songs to swap out in the stratified sample between runs (0.0 to 1.0). | `0.2`                                |
-| `MIN_SONGS_PER_GENRE_FOR_STRATIFICATION` | Minimum number of songs to target per stratified genre during sampling.    | `100`                                |
-| `STRATIFIED_SAMPLING_TARGET_PERCENTILE`  | Percentile of genre song counts to use for target songs per stratified genre. | `50`                                 |
-| `OLLAMA_SERVER_URL`                      | URL for your Ollama instance (if `AI_MODEL_PROVIDER` is OLLAMA).           | `http://<your-ip>:11434/api/generate` |
-| `OLLAMA_MODEL_NAME`                      | Ollama model to use (if `AI_MODEL_PROVIDER` is OLLAMA).                    | `mistral:7b`                         |
-| `GEMINI_MODEL_NAME`                      | Gemini model to use (if `AI_MODEL_PROVIDER` is GEMINI).                    | `gemini-2.5-pro`            |
-| **Scoring Weights**                      |                                                                              |                                      |
-| `SCORE_WEIGHT_DIVERSITY`                 | Weight for inter-playlist mood diversity.                                  | `2.0`                                |
-| `SCORE_WEIGHT_PURITY`                    | Weight for playlist purity (intra-playlist mood consistency).                | `1.0`                                |
-| `SCORE_WEIGHT_OTHER_FEATURE_DIVERSITY`   | Weight for inter-playlist 'other feature' diversity.                       | `0.0`                                |
-| `SCORE_WEIGHT_OTHER_FEATURE_PURITY`      | Weight for intra-playlist 'other feature' consistency.                     | `0.0`                                |
-| `SCORE_WEIGHT_SILHOUETTE`                | Weight for Silhouette Score (cluster separation).                          | `0.0`                                |
-| `SCORE_WEIGHT_DAVIES_BOULDIN`            | Weight for Davies-Bouldin Index (cluster separation).                    | `0.0`                                |
-| `SCORE_WEIGHT_CALINSKI_HARABASZ`         | Weight for Calinski-Harabasz Index (cluster separation).               | `0.0`                                |
+| Parameter                                                  | Description                                                                                                                | Default Value                        |
+|------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------|--------------------------------------|
+| **Analysis General**                                       |                                                                                                                            |                                      | 
+| `NUM_RECENT_ALBUMS`                                        | Number of recent albums to scan (0 for all).                                                                               | `0`                               |
+| `TOP_N_MOODS`                                              | Number of top moods per track for feature vector.                                                                          | `5`                                  |
+| **Clustering General**                                     |                                                                                                                            |                                      |
+| `ENABLE_CLUSTERING_EMBEDDINGS`                             | Whether to use audio embeddings (True) or score-based features (False) for clustering.                                     | `false`                              |
+| `CLUSTER_ALGORITHM`                                        | Default clustering: `kmeans`, `dbscan`, `gmm`, `spectral`.                                                                 | `kmeans`                             |
+| `MAX_SONGS_PER_CLUSTER`                                    | Max songs per generated playlist segment.                                                                                  | `0`                                  |
+| `MAX_SONGS_PER_ARTIST`                                     | Max songs from one artist per cluster.                                                                                     | `3`                                  |
+| `MAX_DISTANCE`                                             | Normalized distance threshold for tracks in a cluster.                                                                     | `0.5`                                |
+| `CLUSTERING_RUNS`                                          | Iterations for Monte Carlo evolutionary search.                                                                            | `5000`                               |
+| `TOP_N_PLAYLISTS`                                          | POST Clustering it keep only the top N diverse playlist.                                                                   | `8`                               |
+| **Similarity General**                                     |                                                                                                                            |                                      |
+| `INDEX_NAME`                                               | Name of the index, no need to change.                                                                                      | `music_library`                      |
+| `VOYAGER_EF_CONSTRUCTION`                                  | Number of element analyzed to create the neighbor list in the index.                                                       | `1024`                                 |
+| `VOYAGER_M`                                                | Number of neighbore More  = higher accuracy.                                                                               | `64`                                 |
+| `VOYAGER_QUERY_EF`                                         | Number neighbor analyzed during the query.                                                                                 | `1024`                                 |
+| `VOYAGER_METRIC`                                           | Different tipe of distance metrics: `angular`, `euclidean`,`dot`                                                           | `angular`              |
+| `SIMILARITY_ELIMINATE_DUPLICATES_DEFAULT`                  | It enable the possibility of use the `MAX_SONGS_PER_ARTIST` also in similar song                                           | `true`              |
+| **Sonic Fingerprint General**                              |                                                                                                                            |                                      |
+| `SONIC_FINGERPRINT_NEIGHBORS`                              | Default number of track for the sonic fingerprint                                                                          | `100`                      |
+| **Similar Song and Song Path Duplicate filtering General** |                                                                                                                            |                                      |
+| `DUPLICATE_DISTANCE_THRESHOLD_COSINE`                      | Less than this cosine distance the track is a duplicate.                                                                   | `0.01`                      |
+| `DUPLICATE_DISTANCE_THRESHOLD_EUCLIDEAN`                   | Less than this euclidean distance the track is a duplicate.                                                                | `0.15`                      |
+| `DUPLICATE_DISTANCE_CHECK_LOOKBACK`                        | How many previous song need to be checked for duplicate.                                                                   | `1`                      |
+| **Song Path General**                                      |                                                                                                                            |                                      |
+| `PATH_DISTANCE_METRIC`                                     | The distance metric to use for pathfinding. Options: 'angular', 'euclidean'                                                | `euclidean`   |
+| `PATH_DEFAULT_LENGTH`                                      | Default number of songs in the path if not specified in the API request                                                    | `25`          |
+| `PATH_AVG_JUMP_SAMPLE_SIZE`                                | Number of random songs to sample for calculating the average jump distance                                                 | `200`         |
+| `PATH_CANDIDATES_PER_STEP`                                 | Number of candidate songs to retrieve from Voyager for each step in the path                                               | `25`          |
+| `PATH_LCORE_MULTIPLIER`                                    | It multiply the number of centroid created based on the distance. Higher is better for distant song and worst for nearest. | `3`          |
+| **Evolutionary Clustering & Scoring**                      |                                                                                                                            |                                      |
+| `ITERATIONS_PER_BATCH_JOB`                                 | Number of clustering iterations processed per RQ batch job.                                                                | `20`                                |
+| `MAX_CONCURRENT_BATCH_JOBS`                                | Maximum number of clustering batch jobs to run simultaneously.                                                             | `10`                                  |
+| `TOP_K_MOODS_FOR_PURITY_CALCULATION`                       | Number of centroid's top moods to consider when calculating playlist purity.                                               | `3`                                  |
+| `EXPLOITATION_START_FRACTION`                              | Fraction of runs before starting to use elites.                                                                            | `0.2`                                |
+| `EXPLOITATION_PROBABILITY_CONFIG`                          | Probability of mutating an elite vs. random generation.                                                                    | `0.7`                                |
+| `MUTATION_INT_ABS_DELTA`                                   | Max absolute change for integer parameter mutation.                                                                        | `3`                                  |
+| `MUTATION_FLOAT_ABS_DELTA`                                 | Max absolute change for float parameter mutation.                                                                          | `0.05`                               |
+| `MUTATION_KMEANS_COORD_FRACTION`                           | Fractional change for KMeans centroid coordinates.                                                                         | `0.05`                               |
+| **K-Means Ranges**                                         |                                                                                                                            |                                      |
+| `NUM_CLUSTERS_MIN`                                         | Min $K$ for K-Means.                                                                                                       | `40`                                 |
+| `TOP_K_MOODS_FOR_PURITY_CALCULATION`                       | Number of centroid's top moods to consider when calculating playlist purity.                                               | `3`                                  |
+| `NUM_CLUSTERS_MAX`                                         | Max $K$ for K-Means.                                                                                                       | `100`                                |
+| `USE_MINIBATCH_KMEANS`                                     | Whether to use MiniBatchKMeans (True) or standard KMeans (False) when clustering embeddings.                               | `false`                               |
+| **DBSCAN Ranges**                                          |                                                                                                                            |                                      |
+| `DBSCAN_EPS_MIN`                                           | Min epsilon for DBSCAN.                                                                                                    | `0.1`                                |
+| `DBSCAN_EPS_MAX`                                           | Max epsilon for DBSCAN.                             d                                                                      | `0.5`                                |
+| `DBSCAN_MIN_SAMPLES_MIN`                                   | Min `min_samples` for DBSCAN.                                                                                              | `5`                                  |
+| `DBSCAN_MIN_SAMPLES_MAX`                                   | Max `min_samples` for DBSCAN.                                                                                              | `20`                                 |
+| **GMM Ranges**                                             |                                                                                                                            |                                      |
+| `GMM_N_COMPONENTS_MIN`                                     | Min components for GMM.                                                                                                    | `40`                                 |
+| `GMM_N_COMPONENTS_MAX`                                     | Max components for GMM.                                                                                                    | `100`                                 |
+| `GMM_COVARIANCE_TYPE`                                      | Covariance type for GMM (task uses `full`).                                                                                | `full`                               |
+| **Spectral Ranges**                                        |                                                                                                                            |                                      |
+| `SPECTRAL_N_CLUSTERS_MIN`                                  | Min components for GMM.                                                                                                    | `40`                                 |
+| `SPECTRAL_N_CLUSTERS_MAX`                                  | Max components for GMM.                                                                                                    | `100`                                 |
+| `SPECTRAL_N_NEIGHBORS`                                     | Number of Neighbors on which do clustering. Higher is better but slower                                                    | `20`                               |
+| **PCA Ranges**                                             |                                                                                                                            |                                      |
+| `PCA_COMPONENTS_MIN`                                       | Min PCA components (0 to disable).                                                                                         | `0`                                  |
+| `PCA_COMPONENTS_MAX`                                       | Max PCA components (e.g., `8` for feature vectors, `199` for embeddings).                                                  | `8`                                  |
+| **AI Naming (*)**                                          |                                                                                                                            |                                      |
+| `AI_MODEL_PROVIDER`                                        | AI provider: `OLLAMA`, `GEMINI`, `MISTRAL` or `NONE`.                                                                      | `NONE`                               |
+| **Evolutionary Clustering & Scoring**                      |                                                                                                                            |                                      |
+| `TOP_N_ELITES`                                             | Number of best solutions kept as elites.                                                                                   | `10`                                 |
+| `SAMPLING_PERCENTAGE_CHANGE_PER_RUN`                       | Percentage of songs to swap out in the stratified sample between runs (0.0 to 1.0).                                        | `0.2`                                |
+| `MIN_SONGS_PER_GENRE_FOR_STRATIFICATION`                   | Minimum number of songs to target per stratified genre during sampling.                                                    | `100`                                |
+| `STRATIFIED_SAMPLING_TARGET_PERCENTILE`                    | Percentile of genre song counts to use for target songs per stratified genre.                                              | `50`                                 |
+| `OLLAMA_SERVER_URL`                                        | URL for your Ollama instance (if `AI_MODEL_PROVIDER` is OLLAMA).                                                           | `http://<your-ip>:11434/api/generate` |
+| `OLLAMA_MODEL_NAME`                                        | Ollama model to use (if `AI_MODEL_PROVIDER` is OLLAMA).                                                                    | `mistral:7b`                         |
+| `GEMINI_MODEL_NAME`                                        | Gemini model to use (if `AI_MODEL_PROVIDER` is GEMINI).                                                                    | `gemini-2.5-pro`            |
+| `MISTRAL_MODEL_NAME`                                       | Mistral model to use (if `AI_MODEL_PROVIDER` is MISTRAL).                                                                  | `ministral-3b-latest`            |
+| **Scoring Weights**                                        |                                                                                                                            |                                      |
+| `SCORE_WEIGHT_DIVERSITY`                                   | Weight for inter-playlist mood diversity.                                                                                  | `2.0`                                |
+| `SCORE_WEIGHT_PURITY`                                      | Weight for playlist purity (intra-playlist mood consistency).                                                              | `1.0`                                |
+| `SCORE_WEIGHT_OTHER_FEATURE_DIVERSITY`                     | Weight for inter-playlist 'other feature' diversity.                                                                       | `0.0`                                |
+| `SCORE_WEIGHT_OTHER_FEATURE_PURITY`                        | Weight for intra-playlist 'other feature' consistency.                                                                     | `0.0`                                |
+| `SCORE_WEIGHT_SILHOUETTE`                                  | Weight for Silhouette Score (cluster separation).                                                                          | `0.0`                                |
+| `SCORE_WEIGHT_DAVIES_BOULDIN`                              | Weight for Davies-Bouldin Index (cluster separation).                                                                      | `0.0`                                |
+| `SCORE_WEIGHT_CALINSKI_HARABASZ`                           | Weight for Calinski-Harabasz Index (cluster separation).                                                                   | `0.0`                                |
 
 
 
-**(*)** For using GEMINI API you need to have a Google account, a free account can be used if needed. Instead if you want to self-host Ollama here you can find a deployment example:
+**(*)** For using GEMINI API you need to have a Google account, a free account can be used if needed. Same goes for Mistral. Instead if you want to self-host Ollama here you can find a deployment example:
 
 * https://github.com/NeptuneHub/k3s-supreme-waffle/tree/main/ollama
 
@@ -705,7 +712,7 @@ This is the main workflow of how this algorithm works. For an easy way to use it
         *   An evolutionary algorithm performs numerous clustering runs (e.g., K-Means, DBSCAN, or GMM) on the analyzed data. It explores different parameters to find optimal playlist structures based on a comprehensive scoring system.
 *   **Playlist Generation & Naming:**
     *   Playlists are formed from the best clustering solution found by the evolutionary process.
-    *   Optionally, AI models (Ollama or Gemini) can be used to generate creative, human-readable names for these playlists.
+    *   Optionally, AI models (Ollama, Gemini or Mistral) can be used to generate creative, human-readable names for these playlists.
     *   Finalized playlists are created directly in your Jellyfin or Navidrome library.
 *   **Advanced Task Management:**
     *   The web UI offers real-time monitoring of task progress, including main and sub-tasks.
@@ -966,7 +973,7 @@ You can tune the weights to emphasize:
 After the clustering algorithm has identified groups of similar songs, AudioMuse-AI can optionally use an AI model to generate creative, human-readable names for the resulting playlists. This replaces the default "Mood_Tempo" naming scheme with something more evocative.
 
 1.  **Input to AI:** For each cluster, the system extracts key characteristics derived from the cluster's centroid (like predominant moods and tempo) and provides a sample list of songs from that cluster.
-2.  **AI Model Interaction:** This information is sent to a configured AI model (either a self-hosted **Ollama** instance or **Google Gemini**) along with a carefully crafted prompt.
+2.  **AI Model Interaction:** This information is sent to a configured AI model (either a self-hosted **Ollama** instance or a cloud-based one like **Google Gemini** or **Mistral**) along with a carefully crafted prompt.
 3.  **Prompt Engineering:** The prompt guides the AI to act as a music curator and generate a concise playlist name (15-35 characters) that reflects the mood, tempo, and overall vibe of the songs, while adhering to strict formatting rules (standard ASCII characters only, no extra text).
 4.  **Output Processing:** The AI's response is cleaned to ensure it meets the formatting and length constraints before being used as the final playlist name (with the `_automatic` suffix appended later by the task runner).
 
@@ -1005,7 +1012,7 @@ The "Instant Playlist" feature, accessible via `chat.html`, provides a direct wa
 **Core Workflow:**
 
 1.  **User Interface (`chat.html`):**
-    *   The user selects an AI provider (Ollama or Gemini) and can customize model names, Ollama server URLs, or Gemini API keys. These default to values from the server's `config.py` but can be overridden per session in the UI.
+    *   The user selects an AI provider (Ollama, Gemini or Mistral) and can customize model names, Ollama server URLs, or Gemini/Mistral API keys. These default to values from the server's `config.py` but can be overridden per session in the UI.
     *   The user types a natural language request (e.g., "sad songs for a rainy day" or "energetic pop from the 2020s").
 
 2.  **API Call (`app_chat.py` - `/api/chatPlaylist`):**
@@ -1023,8 +1030,8 @@ The "Instant Playlist" feature, accessible via `chat.html`, provides a direct wa
     *   The user's natural language input is appended to this master prompt.
 
 4.  **AI Model Interaction (`ai.py` via `app_chat.py`):**
-    *   Based on the selected provider, `app_chat.py` calls either `get_ollama_playlist_name` or `get_gemini_playlist_name` from `ai.py`.
-    *   These functions send the complete prompt to the respective AI model (Ollama or Gemini).
+    *   Based on the selected provider, `app_chat.py` calls either `get_ollama_playlist_name`, `get_gemini_playlist_name` `get_mistral_playlist_name` from `ai.py`.
+    *   These functions send the complete prompt to the respective AI model (Ollama, Gemini or Mistral).
 
 5.  **SQL Query Processing (`app_chat.py` - `clean_and_validate_sql`):**
     *   The raw SQL string returned by the AI is processed:
@@ -1127,6 +1134,7 @@ AudioMuse AI is built upon a robust stack of open-source technologies:
   * Task status for the web interface.  
 * [**Ollama**](https://ollama.com/) Enables self-hosting of various open-source Large Language Models (LLMs) for tasks like intelligent playlist naming.
 * [**Google Gemini API:**](https://ai.google.dev/) Provides access to Google's powerful generative AI models, used as an alternative for intelligent playlist naming.
+* [**Mistral API:**](https://docs.mistral.ai/api/) Provides access to Mistral's powerful generative AI models, used as an alternative for intelligent playlist naming.
 * [**Jellyfin API**](https://jellyfin.org/) Integrates directly with your Jellyfin server to fetch media, download audio, and create/manage playlists.  
 * [**Navidrome Susbsonic API**](https://www.navidrome.org/) Integrates directly with your Navidrome (or Subsonic like) server to fetch media, download audio, and create/manage playlists.  
 * [**Docker / OCI-compatible Containers**](https://www.docker.com/) – The entire application is packaged as a container, ensuring consistent and portable deployment across environments.

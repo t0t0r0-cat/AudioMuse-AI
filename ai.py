@@ -6,6 +6,7 @@ import time # Import the time library
 import logging
 import unicodedata
 import google.generativeai as genai # Import Gemini library
+from mistralai import Mistral
 import os # Import os to potentially read GEMINI_API_CALL_DELAY_SECONDS
 
 logger = logging.getLogger(__name__)
@@ -153,8 +154,58 @@ def get_gemini_playlist_name(gemini_api_key, model_name, full_prompt):
         logger.error("Error calling Gemini API: %s", e, exc_info=True)
         return "Error: AI service is currently unavailable."
 
+# --- Mistral Specific Function ---
+def get_mistral_playlist_name(mistral_api_key, model_name, full_prompt):
+    """
+    Calls the Mistral API to get a playlist name.
+
+    Args:
+        mistral_api_key (str): Your Mistral API key.
+        model_name (str): The mistral model to use (e.g., "ministral-3b-latest").
+        full_prompt (str): The complete prompt text to send to the model.
+    Returns:
+        str: The extracted playlist name from the model's response, or an error message.
+    """
+    # Allow any provided key, even if it's the placeholder, but check if it's empty/default
+    if not mistral_api_key or mistral_api_key == "YOUR-MISTRAL-API-KEY-HERE":
+         return "Error: Mistral API key is missing or empty. Please provide a valid API key."
+
+    try:
+        # Read delay from environment/config if needed, otherwise use the default
+        mistral_call_delay = int(os.environ.get("MISTRAL_API_CALL_DELAY_SECONDS", "7")) # type: ignore
+        if mistral_call_delay > 0:
+            logger.debug("Waiting for %ss before mistral API call to respect rate limits.", mistral_call_delay)
+            time.sleep(mistral_call_delay)
+
+        client = Mistral(api_key=mistral_api_key)
+
+        logger.debug("Starting API call for model '%s'.", model_name)
+
+        response = client.chat.complete(model=model_name,
+                                        temperature=0.9,
+                                        timeout_ms=960,
+                                        messages=[
+                                            {
+                                                "role": "user",
+                                                "content": full_prompt,
+                                            },
+                                        ])
+        # Extract text from the response # type: ignore
+        if response and response.choices[0].message.content:
+            extracted_text = response.choices[0].message.content
+        else:
+            logger.debug("Mistral returned no content. Raw response: %s", response)
+            return "Error: mistral returned no content."
+
+        # The final cleaning and length check is done in the general function
+        return extracted_text
+
+    except Exception as e:
+        logger.error("Error calling Mistral API: %s", e, exc_info=True)
+        return "Error: AI service is currently unavailable."
+
 # --- General AI Naming Function ---
-def get_ai_playlist_name(provider, ollama_url, ollama_model_name, gemini_api_key, gemini_model_name, prompt_template, feature1, feature2, feature3, song_list, other_feature_scores_dict):
+def get_ai_playlist_name(provider, ollama_url, ollama_model_name, gemini_api_key, gemini_model_name, mistral_api_key, mistral_model_name, prompt_template, feature1, feature2, feature3, song_list, other_feature_scores_dict):
     """
     Selects and calls the appropriate AI model based on the provider.
     Constructs the full prompt including new features.
@@ -209,6 +260,8 @@ def get_ai_playlist_name(provider, ollama_url, ollama_model_name, gemini_api_key
         name = get_ollama_playlist_name(ollama_url, ollama_model_name, full_prompt)
     elif provider == "GEMINI":
         name = get_gemini_playlist_name(gemini_api_key, gemini_model_name, full_prompt)
+    elif provider == "MISTRAL":
+        name = get_mistral_playlist_name(mistral_api_key, mistral_model_name, full_prompt)
     # else: provider is NONE or invalid, name remains "AI Naming Skipped"
 
     # Apply length check and return final name or error
