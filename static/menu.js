@@ -44,6 +44,9 @@ document.addEventListener('DOMContentLoaded', function() {
         { href: '/', text: 'Analysis and Clustering' },
         { href: '/chat', text: 'Instant Playlist' },
         { href: '/similarity', text: 'Playlist from Similar Song' },
+        { href: '/universe', text: 'Song Universe Map' },
+        { href: '/alternative_universe', text: 'Alternative Universe (Graph)' },
+        { href: '/music_map', text: 'Music Map (t-SNE)' },
         { href: '/path', text: 'Song Path' },
         { href: '/sonic_fingerprint', text: 'Sonic Fingerprint' },
         { href: '/collection', text: 'Collection Sync' }, // New Menu Item - commented because still experimental
