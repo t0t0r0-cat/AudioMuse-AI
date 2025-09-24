@@ -2,7 +2,7 @@
 import os
 
 # --- Media Server Type ---
-MEDIASERVER_TYPE = os.environ.get("MEDIASERVER_TYPE", "jellyfin").lower() # Possible values: jellyfin, navidrome
+MEDIASERVER_TYPE = os.environ.get("MEDIASERVER_TYPE", "jellyfin").lower() # Possible values: jellyfin, navidrome, lyrion
 
 # --- Jellyfin and DB Constants (Read from Environment Variables first) ---
 
@@ -19,9 +19,13 @@ NAVIDROME_URL = os.environ.get("NAVIDROME_URL", "http://your_navidrome_url:4533"
 NAVIDROME_USER = os.environ.get("NAVIDROME_USER", "your_navidrome_user")
 NAVIDROME_PASSWORD = os.environ.get("NAVIDROME_PASSWORD", "your_navidrome_password") # Use the password directly
 
+# --- Lyrion (LMS) Constants ---
+# These are used only if MEDIASERVER_TYPE is "lyrion".
+LYRION_URL = os.environ.get("LYRION_URL", "http://your_lyrion_url:9000")
+
 
 # --- General Constants (Read from Environment Variables where applicable) ---
-APP_VERSION = "v0.6.7-beta" # Version updated for Sonic Fingerprint
+APP_VERSION = "v0.6.8-beta" # Version updated for Sonic Fingerprint
 MAX_DISTANCE = 0.5
 MAX_SONGS_PER_CLUSTER = 0
 MAX_SONGS_PER_ARTIST = int(os.getenv("MAX_SONGS_PER_ARTIST", "3")) # Max songs per artist in similarity results and clustering
@@ -232,6 +236,9 @@ OTHER_FEATURE_LABELS = ['danceable', 'aggressive', 'happy', 'party', 'relaxed', 
 # --- Sonic Fingerprint Constants ---
 SONIC_FINGERPRINT_TOP_N_SONGS = int(os.environ.get("SONIC_FINGERPRINT_TOP_N_SONGS", "20"))
 SONIC_FINGERPRINT_NEIGHBORS = int(os.environ.get("SONIC_FINGERPRINT_NEIGHBORS", "100"))
+
+# --- Database Cleaning Safety ---
+CLEANING_SAFETY_LIMIT = int(os.environ.get("CLEANING_SAFETY_LIMIT", "100"))  # Max orphaned albums to delete in one run
 
 # --- Stratified Sampling Constants (New) ---
 # Genres for which to enforce equal representation during stratified sampling

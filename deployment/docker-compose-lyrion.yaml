@@ -1,6 +1,4 @@
 version: '3.8'
-# Remember to scale the worker to minimum 2
-# docker compose up -d --scale audiomuse-ai-worker=2
 services:
   # Redis service for RQ (task queue)
   redis:
@@ -34,10 +32,8 @@ services:
       - "8000:8000"
     environment:
       SERVICE_TYPE: "flask"
-      MEDIASERVER_TYPE: "navidrome"
-      NAVIDROME_URL: "YOUR-NAVIDROME-URL" #for example http://192.168.3.13:4533/
-      NAVIDROME_USER: "YOUR-USER"
-      NAVIDROME_PASSWORD: "YOUR-PASSWORD"
+      MEDIASERVER_TYPE: "lyrion"
+      LYRION_URL: "http://YOUR-LYRION-URL"
       POSTGRES_USER: "audiomuse"
       POSTGRES_PASSWORD: "audiomusepassword"
       POSTGRES_DB: "audiomusedb"
@@ -59,10 +55,8 @@ services:
     container_name: audiomuse-ai-worker-instance
     environment:
       SERVICE_TYPE: "worker"
-      MEDIASERVER_TYPE: "navidrome"
-      NAVIDROME_URL: "YOUR-NAVIDROME-URL" #for example http://192.168.3.13:4533/
-      NAVIDROME_USER: "YOUR-USER"
-      NAVIDROME_PASSWORD: "YOUR-PASSWORD"
+      MEDIASERVER_TYPE: "lyrion"
+      LYRION_URL: "http://YOUR-LYRION-URL"
       POSTGRES_USER: "audiomuse"
       POSTGRES_PASSWORD: "audiomusepassword"
       POSTGRES_DB: "audiomusedb"

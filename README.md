@@ -11,7 +11,7 @@
 
 
 
-AudioMuse-AI is an Open Source Dockerized environment that brings smart playlist generation to [Jellyfin](https://jellyfin.org) and [Navidrome](https://www.navidrome.org/) using sonic audio analysis via  [Librosa](https://github.com/librosa/librosa), [Tensorflow](https://www.tensorflow.org/)  and AI models. All you need is in a container that you can deploy locally or on your Kubernetes cluster (tested on K3S). In this repo you will find deployment examples for Kubernetes, Podman, and Docker Compose.
+AudioMuse-AI is an Open Source Dockerized environment that brings smart playlist generation to [Jellyfin](https://jellyfin.org), [Navidrome](https://www.navidrome.org/) and [Lyrion](https://lyrion.org/) using sonic audio analysis via  [Librosa](https://github.com/librosa/librosa), [Tensorflow](https://www.tensorflow.org/)  and AI models. All you need is in a container that you can deploy locally or on your Kubernetes cluster (tested on K3S). In this repo you will find deployment examples for Kubernetes, Podman, and Docker Compose.
 
 With Navidrome we support Subsonic API, so additional Mediaserver with Subsonic APi will work like [LMS](https://github.com/epoupon/lms/tree/master). For them just refear to the instruction for Navidrome.
 
@@ -32,7 +32,8 @@ The **supported architecture** are:
 
 
 And now just some **NEWS:**
-> * Version 0.6.6-beta introduce the **Collection Sync EXPERIMENTAL** functionality. **ONLY** in this functionality, **ONLY** by readingand accepting the [Privacy Policy](https://github.com/NeptuneHub/AudioMuse-AI/blob/main/PRIVACY.md) and **ONLY** when you EXPLICITLY do a OAuth login with your github account, you can sync you library with a Centralized Database on cloud.
+> * Version 0.6.8-beta introduce the support to Lyrion Music Server.
+> * Version 0.6.6-beta introduce the **Collection Sync EXPERIMENTAL** functionality. **ONLY** in this functionality, **ONLY** by readingand accepting the [Privacy Policy](https://github.com/NeptuneHub/AudioMuse-AI/blob/main/PRIVACY.md) and **ONLY** when you EXPLICITLY do a OAuth login with your github account, you can sync you library with a Centralized Database on cloud. **IMPORTANT:** The centralized database server is actually offline.
 > * Version 0.6.5-beta introduce the **Song Path** feature. Input two song and get a sonic path between them.
 > * Version 0.6.4-beta introdcue **Sonic Fingerprint** turn your listening history in a fingerprint to discover similar sonic songs.
 > * Version 0.6.3-beta introduce **Voyager index** for the similarity function. Raising the recall from 70-80% to 99% for 100 similar song. Also using less memory.
@@ -89,7 +90,7 @@ This section provides a minimal guide to deploy AudioMuse-AI on a K3S (Kubernete
     *   A running `K3S cluster`.
     *   `kubectl` configured to interact with your cluster.
     *   `helm` installed.
-    *   `Jellyfin` or `Navidrome` installed.
+    *   `Jellyfin` or `Navidrome` or `Lyrion` installed.
     *   Respect the HW requirements (look the specific chapter)
 
 The helm chart repo is provided here:
@@ -188,7 +189,7 @@ This section provides a minimal guide to deploy AudioMuse-AI on a K3S (Kubernete
 1.  **Prerequisites:**
     *   A running K3S cluster.
     *   `kubectl` configured to interact with your cluster.
-    *   `Jellyfin` or `Navidrome` installed.
+    *   `Jellyfin` or `Navidrome` or `Lyrion` installed.
     *   Respect the HW requirements (look the specific chapter)
 
 2.  **Configuration:**
@@ -214,7 +215,7 @@ In case you want to deploy AudioMuse-AI on K3S but interacting with Navidrome th
 
 *  **Configuration:**
     *   Navigate to the `deployment/` directory.
-    *   Edit `deployment-yaml.yaml` to configure mandatory parameters:
+    *   Edit `deployment-navidrome.yaml` to configure mandatory parameters:
         *   **Secrets:**
             *   `navidrome-credentials`: Update `NAVIDROME_USER` and `NAVIDROME_PASSWORD`.
             *   `postgres-credentials`: Update `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_DB`.
@@ -222,7 +223,19 @@ In case you want to deploy AudioMuse-AI on K3S but interacting with Navidrome th
         *   **ConfigMap (`audiomuse-ai-config`):**
             *   Update `NAVIDROME_URL`.
             *   Ensure `POSTGRES_HOST`, `POSTGRES_PORT`, and `REDIS_URL` are correct for your setup (defaults are for in-cluster services).
-            *   
+
+In case you want to deploy AudioMuse-AI on K3S but interacting with Lyrion there is just some minimal configuration changes:
+
+*  **Configuration:**
+    *   Navigate to the `deployment/` directory.
+    *   Edit `deployment-lyrion.yaml` to configure mandatory parameters:
+        *   **Secrets:**
+            *   `postgres-credentials`: Update `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_DB`.
+            *   `gemini-api-credentials` (if using Gemini for AI Naming): Update `GEMINI_API_KEY`.
+        *   **ConfigMap (`audiomuse-ai-config`):**
+            *   Update `LYRION_URL`.
+            *   Ensure `POSTGRES_HOST`, `POSTGRES_PORT`, and `REDIS_URL` are correct for your setup (defaults are for in-cluster services).
+            
 **Note:** 
   > The same instruction used for Navidrome could apply to other Mediaserver that support Subsonic API. LMS for example is supported, only remember to user the Subsonic API token instead of the password.
 
@@ -294,7 +307,7 @@ For a quick and interactive way to generate playlists without running the full e
 4.  **Review and Create:**
     *   The AI will generate a PostgreSQL query based on your request. This query is then executed against your `score` table.
     *   The results (a list of songs) will be displayed.
-    *   If songs are found, a new section will appear allowing you to name the playlist and click "Let's do it" to create this playlist directly on your Jellyfin or Navidrome server. The playlist name on Jellyfin or Navidrome will have `_instant` appended to the name you provide.
+    *   If songs are found, a new section will appear allowing you to name the playlist and click "Let's do it" to create this playlist directly on your Jellyfin, Navidrome, or Lyrion server. The playlist name will have `_instant` appended to the name you provide.
 
 **Example Queries (Tested with Gemini):**
 *   "Create a playlist that is good for post lunch"
@@ -319,7 +332,7 @@ This new functionality enable you to search the top N similar song that are simi
 3.  **Run the similarity search**
     *   Ask the front-end to find the similar track, it will show to you in the table
 4.  **Review and Create:**
-    *   Input a name for the playlist and ask the interface to create it directly on Jellyfin or Navidrome. That's it!
+    *   Input a name for the playlist and ask the interface to create it directly on Jellyfin, Navidrome, or Lyrion. That's it!
 
 ## **Sonic Fingerprint playlist (via sonic_fingerprint Interface)**
 
@@ -339,7 +352,9 @@ This new functionality analyze your listening history and create your specific s
 5.  **Run the Sonic Fingerprint search**
     *   Ask the front-end to generate the list of Sonic Fingerprint track, it will show to you in the table.
 6.  **Review and Create:**
-    *   Input a name for the playlist and ask the interface to create it directly on Jellyfin or Navidrome. That's it!
+    *   Input a name for the playlist and ask the interface to create it directly on Jellyfin, Navidrome, or Lyrion. That's it!
+
+**Note for Lyrion users:** Lyrion doesn't require user credentials since it doesn't have user-specific authentication like Jellyfin or Navidrome. The interface will automatically handle this for Lyrion deployments.
 
 ## **Song Path playlist (via path Interface)**
 
@@ -357,7 +372,7 @@ This new functionality create a sonic similar path between two song asked from t
 5.  **Run the path search**
     *   Ask the front-end to generate the path, it will show to you in the table.
 6.  **Review and Create:**
-    *   Input a name for the playlist and ask the interface to create it directly on Jellyfin or Navidrome. That's it!
+    *   Input a name for the playlist and ask the interface to create it directly on Jellyfin, Navidrome, or Lyrion. That's it!
 
 ## **Collection Sync (via collection Interface)**
 
@@ -381,7 +396,13 @@ The login is required mainly to avoid high traffic on the central database. If y
 
 ## **Kubernetes Deployment (K3S Example)**
 
-The Quick Start provided in the `playlist` namespace the following resources (the same explanetion have sense for both Navidrome and Jellyfin):
+AudioMuse-AI supports deployment on Kubernetes with multiple media server backends. Choose the deployment file that matches your media server:
+
+- **Jellyfin**: Use `deployment/deployment.yaml`
+- **Navidrome**: Use `deployment/deployment-navidrome.yaml` 
+- **Lyrion**: Use `deployment/deployment-lyrion.yaml`
+
+The Quick Start provided in the `playlist` namespace the following resources (the same explanetion have sense for Navidrome, Lyrion and Jellyfin):
 
 **Pods (Workloads):**
 *   **`audiomuse-ai-worker`**: Runs the background job processors using Redis Queue. It's recommended to run a **minimum of 2 replicas** to ensure one worker can handle main tasks while others manage subprocesses, preventing potential stalls. You can scale this based on your cluster size and workload (starting from version **v0.4.0-beta** one worker should be able to handle both main and sub tasks, so a minimum of 1 replica is enough)
@@ -439,12 +460,14 @@ The **mandatory** parameter that you need to change from the example are this:
 
 | Parameter          | Description                                    | Default Value                     |
 |--------------------|------------------------------------------------|-----------------------------------|
+| `MEDIASERVER_TYPE` | (Required) jellyfin, navidrome, lyrion         | `jellyfin`    |
 | `JELLYFIN_URL`     | (Required) Your Jellyfin server's full URL     | `http://YOUR_JELLYFIN_IP:8096`    |
 | `JELLYFIN_USER_ID` | (Required) Jellyfin User ID.                   | *(N/A - from Secret)* |
 | `JELLYFIN_TOKEN`   | (Required) Jellyfin API Token.                 | *(N/A - from Secret)* |
 | `NAVIDROME_URL`     | (Required) Your Navidrome server's full URL    | `http://YOUR_JELLYFIN_IP:4553`    |
 | `NAVIDROME_USER`    | (Required) Navidrome User ID.                  | *(N/A - from Secret)* |
 | `NAVIDROME_PASSWORD`| (Required) Navidrome user Password.            | *(N/A - from Secret)* |
+| `LYRION_URL`       | (Required) Your Lyrion server's full URL       | `http://YOUR_JELLYFIN_IP:9000`    |
 | `POSTGRES_USER`    | (Required) PostgreSQL username.                | *(N/A - from Secret)* | # Corrected typo
 | `POSTGRES_PASSWORD`| (Required) PostgreSQL password.                | *(N/A - from Secret)* |
 | `POSTGRES_DB`      | (Required) PostgreSQL database name.           | *(N/A - from Secret)* |
@@ -458,6 +481,7 @@ These parameter can be leave as it is:
 | Parameter               | Description                                 | Default Value                       |
 | ----------------------- | ------------------------------------------- | ----------------------------------- |
 | `TEMP_DIR`              | Temp directory for audio files              | `/app/temp_audio`                   |
+| `CLEANING_SAFETY_LIMIT` | Max number of albums deleted during cleaning | `100`                             |
 
 
 This are the default parameters on wich the analysis or clustering task will be lunched. You will be able to change them to another value directly in the front-end:
@@ -551,11 +575,19 @@ This are the default parameters on wich the analysis or clustering task will be 
 
 ## **Local Deployment with Docker Compose**
 
-For a quick local setup or for users not using Kubernetes, a `docker-compose.yaml` file is provided in the `deployment/` directory for interacting with **Jellyfin**. `docker-compose-navidrome.yaml` is instead pre-compiled to interact with **Navidrome** or other Subsonic API based Mediaserver.
+AudioMuse-AI provides Docker Compose files for different media server backends:
+
+- **Jellyfin**: Use `deployment/docker-compose.yaml`
+- **Navidrome**: Use `deployment/docker-compose-navidrome.yaml`
+- **Lyrion**: Use `deployment/docker-compose-lyrion.yaml`
+
+Choose the appropriate file based on your media server setup.
+
+For a quick local setup or for users not using Kubernetes, a `docker-compose.yaml` file is provided in the `deployment/` directory for interacting with **Jellyfin**. `docker-compose-navidrome.yaml` is instead pre-compiled to interact with **Navidrome** or other Subsonic API based Mediaserver. Finally `docker-compose-lyrion.yaml` is precompiled for Lyrion.
 
 **Prerequisites:**
 *   Docker and Docker Compose installed.
-*   `Jellyfin` or `Navidrome` installed.
+*   `Jellyfin` or `Navidrome` or `Lyrion` installed.
 *   Respect the [hardware requirements](#hardware-requirements)
 
 **Steps:**
@@ -564,7 +596,7 @@ For a quick local setup or for users not using Kubernetes, a `docker-compose.yam
     cd deployment
     ```
 2.  **Review and Customize (Optional):**
-    The `docker-compose.yaml` and `docker-compose-navidrome.yaml` files are pre-configured with default credentials and settings suitable for local testing. You can edit environment variables within this file directly (e.g., `JELLYFIN_URL`, `JELLYFIN_USER_ID`, `JELLYFIN_TOKEN` for **Jellyfin** or `NAVIDROME_URL`, `NAVIDROME_USER` and `NAVIDROME_PASSWORD` for **Navidrome**).
+    The `docker-compose.yaml`, `docker-compose-navidrome.yaml` and `docker-compose-lyrion.yaml` files are pre-configured with default credentials and settings suitable for local testing. You can edit environment variables within this file directly (e.g., `JELLYFIN_URL`, `JELLYFIN_USER_ID`, `JELLYFIN_TOKEN` for **Jellyfin** or `NAVIDROME_URL`, `NAVIDROME_USER` and `NAVIDROME_PASSWORD` for **Navidrome**,  `LYRION_URL` for Lyrion that doesn't require any passwords).
 3.  **Start the Services:**
     ```bash
     docker compose up -d

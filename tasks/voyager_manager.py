@@ -139,16 +139,20 @@ def build_and_store_voyager_index(db_conn):
         id_map_json = json.dumps(local_id_map)
 
         logger.info(f"Storing Voyager index '{INDEX_NAME}' in the database...")
+        
+        # Use a more explicit approach for binary data storage
         upsert_query = """
             INSERT INTO voyager_index_data (index_name, index_data, id_map_json, embedding_dimension, created_at)
-            VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
+            VALUES (%s, %s::bytea, %s, %s, CURRENT_TIMESTAMP)
             ON CONFLICT (index_name) DO UPDATE SET
                 index_data = EXCLUDED.index_data,
                 id_map_json = EXCLUDED.id_map_json,
                 embedding_dimension = EXCLUDED.embedding_dimension,
                 created_at = CURRENT_TIMESTAMP;
         """
-        cur.execute(upsert_query, (INDEX_NAME, psycopg2.Binary(index_binary_data), id_map_json, EMBEDDING_DIMENSION))
+        # Use memoryview to ensure proper binary handling
+        binary_data = memoryview(index_binary_data)
+        cur.execute(upsert_query, (INDEX_NAME, binary_data, id_map_json, EMBEDDING_DIMENSION))
         db_conn.commit()
         logger.info("Voyager index build and database storage complete.")
 
