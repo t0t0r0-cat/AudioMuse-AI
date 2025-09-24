@@ -200,3 +200,4 @@ def generate_sonic_fingerprint_endpoint():
     except Exception as e:
         logger.error(f"Error in sonic_fingerprint endpoint: {e}", exc_info=True)
         return jsonify({"error": "An unexpected error occurred while generating the sonic fingerprint."}), 500
+

@@ -132,7 +132,6 @@
             const resultsTableWrapper = document.getElementById('results-table-wrapper');
             const playlistStatusDiv = document.getElementById('playlist-status');
 
-            // --- Fetch and pre-populate default credentials on page load ---
             window.addEventListener('DOMContentLoaded', async () => {
                 try {
                     const response = await fetch('/api/config/defaults');
@@ -273,3 +272,4 @@
     <script src="/static/menu.js"></script>
 </body>
 </html>
+
