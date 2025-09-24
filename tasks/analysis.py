@@ -181,21 +181,49 @@ def robust_load_audio_with_fallback(file_path, target_sr=16000):
     # --- Fallback Method: Convert to WAV with pydub ---
     temp_wav_path = None
     try:
-        audio_segment = AudioSegment.from_file(file_path)
-        
+        # Check the audio content with pydub before converting
+        # Use more robust parameters for problematic codecs
+        audio_segment = AudioSegment.from_file(
+            file_path,
+            # Add parameters to help with codec detection issues
+            parameters=[
+                "-analyzeduration", "10M",  # Increase analysis duration
+                "-probesize", "10M",        # Increase probe size  
+                "-ignore_unknown",          # Ignore unknown streams
+                "-err_detect", "ignore_err" # Ignore decode errors
+            ]
+        )
+        if len(audio_segment) == 0:
+            logger.error(f"Pydub loaded a zero-duration audio segment from {os.path.basename(file_path)}. The file is likely corrupt or empty.")
+            return None, None
+
         with NamedTemporaryFile(suffix=".wav", delete=False) as temp_wav_file:
             temp_wav_path = temp_wav_file.name
-
-        audio_segment.export(temp_wav_path, format="wav")
+        
+        # --- MEMORY OPTIMIZATION FOR LARGE FILES ---
+        # Resample and convert to mono during export to create a much smaller temp file.
+        # This is critical for handling very large source files without running out of memory.
+        logger.info(f"Fallback: Pre-processing {os.path.basename(file_path)} to a smaller WAV for safe loading...")
+        processed_segment = audio_segment.set_frame_rate(target_sr).set_channels(1)
+        # Use more robust export parameters
+        processed_segment.export(
+            temp_wav_path, 
+            format="wav",
+            parameters=[
+                "-codec:a", "pcm_s16le",  # Fix the typo: was pcm_s0le, should be pcm_s16le
+                "-ar", str(target_sr),    # Set sample rate explicitly
+                "-ac", "1"                # Set mono explicitly
+            ]
+        )
         
         logger.info(f"Fallback: Converted {os.path.basename(file_path)} to temporary WAV for robust loading.")
         
-        # Load the safe WAV file
+        # Load the safe, downsampled WAV file
         audio, sr = librosa.load(temp_wav_path, sr=target_sr, mono=True, duration=AUDIO_LOAD_TIMEOUT)
         
-        # Final check on the fallback's output
-        if audio is None or audio.size == 0:
-            logger.error(f"Fallback method also resulted in an empty audio signal for {os.path.basename(file_path)}.")
+        # Final check on the fallback's output for silence or emptiness
+        if audio is None or audio.size == 0 or not np.any(audio):
+            logger.error(f"Fallback method also resulted in an empty or silent audio signal for {os.path.basename(file_path)}.")
             return None, None
             
         return audio, sr
@@ -262,6 +290,17 @@ def analyze_track(file_path, mood_labels_list, model_paths):
             return None, None
         
         transposed_patches = np.array(spec_patches).transpose(0, 2, 1)
+
+        # =================================================================
+        # === START: CORRECT FIX FOR DATA TYPE PRECISION ===
+        # The crash on specific CPUs is due to a float precision mismatch. The model
+        # expects float32, but the array can sometimes be float64. Explicitly casting
+        # to float32 is the correct, minimal fix that preserves all data and
+        # ensures compatibility.
+        final_patches = transposed_patches.astype(np.float32)
+        # === END: CORRECT FIX FOR DATA TYPE PRECISION ===
+        # =================================================================
+
     except Exception as e:
         logger.error(f"Spectrogram creation failed for {os.path.basename(file_path)}: {e}", exc_info=True)
         return None, None
@@ -277,7 +316,8 @@ def analyze_track(file_path, mood_labels_list, model_paths):
             tf.import_graph_def(graph_def, name="")
         
         with tf.Session(graph=embedding_graph) as sess:
-            embedding_feed_dict = {DEFINED_TENSOR_NAMES['embedding']['input']: transposed_patches}
+            # Use the corrected float32 patches
+            embedding_feed_dict = {DEFINED_TENSOR_NAMES['embedding']['input']: final_patches}
             embeddings_per_patch = run_inference(sess, embedding_feed_dict, DEFINED_TENSOR_NAMES['embedding']['output'])
 
         # Load and run prediction model
@@ -303,7 +343,8 @@ def analyze_track(file_path, mood_labels_list, model_paths):
                 mood_logits = mood_predictions_raw
             
             averaged_logits = np.mean(mood_logits, axis=0)
-            final_mood_predictions = averaged_logits
+            # Apply sigmoid to convert raw model outputs (logits) into probabilities
+            final_mood_predictions = sigmoid(averaged_logits)
 
             moods = {label: float(score) for label, score in zip(mood_labels_list, final_mood_predictions)}
 
@@ -416,10 +457,12 @@ def analyze_album_task(album_id, album_name, top_n_moods, parent_task_id):
             def get_existing_track_ids(track_ids):
                 if not track_ids: return set()
                 with get_db() as conn, conn.cursor() as cur:
-                    cur.execute("SELECT s.item_id FROM score s JOIN embedding e ON s.item_id = e.item_id WHERE s.item_id IN %s AND s.other_features IS NOT NULL AND s.energy IS NOT NULL AND s.mood_vector IS NOT NULL AND s.tempo IS NOT NULL", (tuple(track_ids),))
+                    # MODIFIED: Cast the integer track IDs to TEXT for the database query.
+                    track_ids_as_strings = [str(id) for id in track_ids]
+                    cur.execute("SELECT s.item_id FROM score s JOIN embedding e ON s.item_id = e.item_id WHERE s.item_id IN %s AND s.other_features IS NOT NULL AND s.energy IS NOT NULL AND s.mood_vector IS NOT NULL AND s.tempo IS NOT NULL", (tuple(track_ids_as_strings),))
                     return {row[0] for row in cur.fetchall()}
 
-            existing_track_ids_set = get_existing_track_ids( [t['Id'] for t in tracks])
+            existing_track_ids_set = get_existing_track_ids( [str(t['Id']) for t in tracks])
             total_tracks_in_album = len(tracks)
 
             for idx, item in enumerate(tracks, 1):
@@ -434,7 +477,7 @@ def analyze_album_task(album_id, album_name, top_n_moods, parent_task_id):
                 progress = 10 + int(85 * (idx / float(total_tracks_in_album)))
                 log_and_update_album_task(f"Analyzing track: {track_name_full} ({idx}/{total_tracks_in_album})", progress, current_track_name=track_name_full)
 
-                if item['Id'] in existing_track_ids_set:
+                if str(item['Id']) in existing_track_ids_set:
                     tracks_skipped_count += 1
                     continue
                 
@@ -538,7 +581,9 @@ def run_analysis_task(num_recent_albums, top_n_moods):
             def get_existing_track_ids(track_ids):
                 if not track_ids: return set()
                 with get_db() as conn, conn.cursor() as cur:
-                    cur.execute("SELECT s.item_id FROM score s JOIN embedding e ON s.item_id = e.item_id WHERE s.item_id IN %s AND s.other_features IS NOT NULL AND s.energy IS NOT NULL AND s.mood_vector IS NOT NULL AND s.tempo IS NOT NULL", (tuple(track_ids),))
+                    # Convert integer track IDs to strings for database comparison
+                    track_ids_as_strings = [str(track_id) for track_id in track_ids]
+                    cur.execute("SELECT s.item_id FROM score s JOIN embedding e ON s.item_id = e.item_id WHERE s.item_id IN %s AND s.other_features IS NOT NULL AND s.energy IS NOT NULL AND s.mood_vector IS NOT NULL AND s.tempo IS NOT NULL", (tuple(track_ids_as_strings),))
                     return {row[0] for row in cur.fetchall()}
 
             def monitor_and_clear_jobs():

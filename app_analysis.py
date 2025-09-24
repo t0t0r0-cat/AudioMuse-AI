@@ -14,6 +14,24 @@ logger = logging.getLogger(__name__)
 # Create a Blueprint for analysis-related routes
 analysis_bp = Blueprint('analysis_bp', __name__)
 
+@analysis_bp.route('/cleaning', methods=['GET'])
+def cleaning_page():
+    """
+    Serves the HTML page for the Database Cleaning feature.
+    ---
+    tags:
+      - UI
+    responses:
+      200:
+        description: HTML content of the cleaning page.
+        content:
+          text/html:
+            schema:
+              type: string
+    """
+    from flask import render_template
+    return render_template('cleaning.html')
+
 @analysis_bp.route('/api/analysis/start', methods=['POST'])
 def start_analysis_endpoint():
     """
@@ -88,3 +106,53 @@ def start_analysis_endpoint():
         job_timeout=-1 # No timeout
     )
     return jsonify({"task_id": job.id, "task_type": "main_analysis", "status": job.get_status()}), 202
+
+@analysis_bp.route('/api/cleaning/start', methods=['POST'])
+def start_cleaning_endpoint():
+    """
+    Identify and automatically clean orphaned albums from the database.
+    This endpoint enqueues a cleaning task that both identifies and deletes orphaned albums.
+    ---
+    tags:
+      - Cleaning
+    responses:
+      202:
+        description: Database cleaning task successfully enqueued.
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                task_id:
+                  type: string
+                  description: The ID of the enqueued database cleaning task.
+                task_type:
+                  type: string
+                  description: Type of the task (cleaning).
+                  example: cleaning
+                status:
+                  type: string
+                  description: The initial status of the job in the queue (e.g., queued).
+      500:
+        description: Server error during task enqueue.
+    """
+    # Local import to prevent circular dependency at startup
+    from app import clean_up_previous_main_tasks, save_task_status, TASK_STATUS_PENDING, rq_queue_high
+
+    # Clean up any previous cleaning tasks
+    clean_up_previous_main_tasks()
+
+    job_id = str(uuid.uuid4())
+    save_task_status(job_id, "cleaning", TASK_STATUS_PENDING, details={"message": "Database cleaning task enqueued."})
+
+    # Enqueue combined cleaning task
+    job = rq_queue_high.enqueue(
+        'tasks.cleaning.identify_and_clean_orphaned_albums_task',
+        job_id=job_id,
+        description="Database Cleaning (Identify and Delete Orphaned Albums)",
+        retry=Retry(max=2),
+        job_timeout=-1 # No timeout
+    )
+    return jsonify({"task_id": job.id, "task_type": "cleaning", "status": job.get_status()}), 202
+
+

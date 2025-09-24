@@ -103,7 +103,14 @@ TASK_STATUS_REVOKED = "REVOKED"
 def get_db():
     if 'db' not in g:
         try:
-            g.db = psycopg2.connect(DATABASE_URL, connect_timeout=15) # 15-second connection timeout
+            g.db = psycopg2.connect(
+                DATABASE_URL, 
+                connect_timeout=30,        # Time to establish connection (increased from 15)
+                keepalives_idle=600,       # Start keepalives after 10 min idle
+                keepalives_interval=30,    # Send keepalive every 30 sec
+                keepalives_count=3,        # 3 failed keepalives = dead connection
+                options='-c statement_timeout=300000'  # 5 min query timeout (300 seconds)
+            )
         except psycopg2.OperationalError as e:
             app.logger.error(f"Failed to connect to database: {e}") # Use app.logger for Flask context
             raise # Re-raise to ensure the operation that needed the DB fails clearly
@@ -504,13 +511,17 @@ def get_tracks_by_ids(item_ids_list):
         return []
     conn = get_db()
     cur = conn.cursor(cursor_factory=DictCursor)
+    
+    # Convert item_ids to strings to match the text type in database
+    item_ids_str = [str(item_id) for item_id in item_ids_list]
+    
     query = """
         SELECT s.item_id, s.title, s.author, s.tempo, s.key, s.scale, s.mood_vector, s.energy, s.other_features, e.embedding
         FROM score s
         LEFT JOIN embedding e ON s.item_id = e.item_id
         WHERE s.item_id IN %s
     """
-    cur.execute(query, (tuple(item_ids_list),))
+    cur.execute(query, (tuple(item_ids_str),))
     rows = cur.fetchall()
     cur.close()
 
@@ -694,6 +705,15 @@ def get_task_status_endpoint(task_id):
         if isinstance(response.get('details'), dict):
             response['details'].pop('checked_album_ids', None)
     
+    # Truncate log entries to last 10 entries for all task types
+    if isinstance(response.get('details'), dict) and 'log' in response['details']:
+        log_entries = response['details']['log']
+        if isinstance(log_entries, list) and len(log_entries) > 10:
+            response['details']['log'] = [
+                f"... ({len(log_entries) - 10} earlier log entries truncated)",
+                *log_entries[-10:]
+            ]
+    
     # Clean up the final response to remove confusing raw time columns
     response.pop('timestamp', None)
     response.pop('start_time', None)
@@ -863,7 +883,7 @@ def cancel_all_tasks_by_type_endpoint(task_type_prefix):
 @app.route('/api/last_task', methods=['GET'])
 def get_last_overall_task_status_endpoint():
     """
-    Get the status of the most recent overall main task (analysis or clustering).
+    Get the status of the most recent overall main task (analysis, clustering, or cleaning).
     """
     db = get_db()
     cur = db.cursor(cursor_factory=DictCursor)
@@ -891,6 +911,15 @@ def get_last_overall_task_status_endpoint():
             last_task_data['running_time_seconds'] = max(0, effective_end_time - start_time)
         else:
             last_task_data['running_time_seconds'] = 0.0
+        
+        # Truncate log entries to last 10 entries
+        if isinstance(last_task_data.get('details'), dict) and 'log' in last_task_data['details']:
+            log_entries = last_task_data['details']['log']
+            if isinstance(log_entries, list) and len(log_entries) > 10:
+                last_task_data['details']['log'] = [
+                    f"... ({len(log_entries) - 10} earlier log entries truncated)",
+                    *log_entries[-10:]
+                ]
         
         # Clean up raw time columns before sending response
         last_task_data.pop('start_time', None)

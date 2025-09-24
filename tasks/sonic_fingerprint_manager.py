@@ -35,17 +35,29 @@ def generate_sonic_fingerprint(num_neighbors=None, user_creds=None):
         logger.warning("No top played songs found. Cannot generate sonic fingerprint.")
         return []
 
-    top_song_ids = [song['Id'] for song in top_songs]
+    top_song_ids = [str(song['Id']) for song in top_songs]  # Convert to strings for consistency
     logger.info(f"Found {len(top_song_ids)} top played songs to create fingerprint from.")
+    logger.debug(f"Top played song IDs: {top_song_ids[:5]}...")  # Log first 5 IDs for debugging
 
     # 2. Get embeddings for these songs from our DB
     track_details = get_tracks_by_ids(top_song_ids)
+    logger.info(f"Retrieved embeddings for {len(track_details)} out of {len(top_song_ids)} songs from database.")
+    if track_details:
+        logger.debug(f"Sample track details - item_ids: {[t['item_id'] for t in track_details[:3]]}")
+    else:
+        logger.warning("No track details found in database for any of the top played songs!")
     if not track_details:
         logger.warning("Could not retrieve embeddings for any of the top songs.")
         return []
 
     # This map will only contain songs that have a valid embedding
     embeddings_map = {track['item_id']: track['embedding_vector'] for track in track_details if 'embedding_vector' in track and track['embedding_vector'].size > 0}
+    logger.info(f"Found valid embeddings for {len(embeddings_map)} songs out of {len(track_details)} track details.")
+    
+    if not embeddings_map:
+        logger.error("No songs have valid embeddings in the database!")
+        logger.debug(f"Track details sample: {track_details[:2] if track_details else 'None'}")
+        return []
     
     weighted_vectors = []
     total_weight = 0
