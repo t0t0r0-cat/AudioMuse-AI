@@ -15,7 +15,7 @@ from config import JELLYFIN_URL, JELLYFIN_USER_ID, JELLYFIN_TOKEN, HEADERS, TEMP
     SPECTRAL_N_CLUSTERS_MIN, SPECTRAL_N_CLUSTERS_MAX, ENABLE_CLUSTERING_EMBEDDINGS, \
     PCA_COMPONENTS_MIN, PCA_COMPONENTS_MAX, CLUSTERING_RUNS, MOOD_LABELS, TOP_N_MOODS, \
     AI_MODEL_PROVIDER, OLLAMA_SERVER_URL, OLLAMA_MODEL_NAME, GEMINI_API_KEY, GEMINI_MODEL_NAME, \
-    TOP_N_PLAYLISTS, MISTRAL_API_KEY, MISTRAL_MODEL_NAME  # *** NEW: Import the default for Top N Playlists ***
+    TOP_N_PLAYLISTS, MISTRAL_API_KEY, MISTRAL_MODEL_NAME
 
 # RQ import
 from rq import Retry
@@ -32,11 +32,15 @@ def clustering_task_failure_handler(job, connection, type, value, tb):
     from app import app, save_task_status, TASK_STATUS_FAILURE
     with app.app_context():
         task_id = job.get_id()
+        
+        # --- FIX: Use traceback.format_exception for reliable formatting ---
+        formatted_traceback = "".join(traceback.format_exception(type, value, tb))
+
         error_details = {
             "message": "Clustering task failed permanently after all retries.",
             "error_type": str(type.__name__),
             "error_value": str(value),
-            "traceback": "".join(traceback.format_tb(tb))
+            "traceback": formatted_traceback
         }
         save_task_status(
             task_id,
@@ -301,7 +305,7 @@ def start_clustering_endpoint():
             "pca_components_max": int(data.get('pca_components_max', PCA_COMPONENTS_MAX)),
             "num_clustering_runs": int(data.get('clustering_runs', CLUSTERING_RUNS)),
             "max_songs_per_cluster_val": int(data.get('max_songs_per_cluster', MAX_SONGS_PER_CLUSTER)),
-            "top_n_playlists_param": int(data.get('top_n_playlists', TOP_N_PLAYLISTS)), # *** NEW: Pass Top N parameter ***
+            "top_n_playlists_param": int(data.get('top_n_playlists', TOP_N_PLAYLISTS)),
             "min_songs_per_genre_for_stratification_param": int(data.get('min_songs_per_genre_for_stratification', MIN_SONGS_PER_GENRE_FOR_STRATIFICATION)),
             "stratified_sampling_target_percentile_param": int(data.get('stratified_sampling_target_percentile', STRATIFIED_SAMPLING_TARGET_PERCENTILE)),
             "score_weight_diversity_param": float(data.get('score_weight_diversity', SCORE_WEIGHT_DIVERSITY)),
