@@ -54,14 +54,18 @@ def batch_task_failure_handler(job, connection, type, value, tb):
         parent_id = job.kwargs.get('parent_task_id')
         batch_id_str = job.kwargs.get('batch_id_str')
         
-        # --- FIX: Use traceback.format_exception for reliable formatting ---
-        formatted_traceback = "".join(traceback.format_exception(type, value, tb))
+        # --- FIX: Handle different traceback types, especially from rq-janitor ---
+        tb_formatted = ""
+        if isinstance(tb, traceback.StackSummary):
+            tb_formatted = "".join(tb.format())
+        else:
+            tb_formatted = "".join(traceback.format_exception(type, value, tb))
 
         error_details = {
             "message": "Clustering batch sub-task failed permanently after all retries.",
             "error_type": str(type.__name__),
             "error_value": str(value),
-            "traceback": formatted_traceback
+            "traceback": tb_formatted
         }
         
         save_task_status(

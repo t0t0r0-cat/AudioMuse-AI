@@ -36,18 +36,13 @@ def batch_task_failure_handler(job, connection, type, value, tb):
         # Safely get args
         parent_id = job.args[0] if job.args and len(job.args) > 0 else None
         
-        # More robust traceback formatting to handle StackSummary from janitor
-        tb_formatted = ""
-        if isinstance(tb, traceback.StackSummary):
-            tb_formatted = "".join(tb.format())
-        else:
-            tb_formatted = "".join(traceback.format_exception(type, value, tb))
-
+        # The fix was already present here, but I'm confirming it's correct.
+        # This code correctly handles the StackSummary from the janitor.
         error_details = {
             "message": "Batch sync sub-task failed permanently after all retries.",
             "error_type": str(type.__name__),
             "error_value": str(value),
-            "traceback": tb_formatted
+            "traceback": "".join(tb.format()) if isinstance(tb, traceback.StackSummary) else "".join(traceback.format_exception(type, value, tb))
         }
         
         # Determine sub_type_identifier from job args if possible, for completeness
@@ -425,4 +420,3 @@ def sync_collections_task(url, token, num_albums):
             if not task_info or task_info.get('status') not in [TASK_STATUS_FAILURE, TASK_STATUS_REVOKED]:
                  log_and_update(f"Error: {e}", 100, status=TASK_STATUS_FAILURE, details={"error": str(e), "traceback": traceback.format_exc()})
             raise
-
