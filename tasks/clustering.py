@@ -24,7 +24,8 @@ from psycopg2.extras import DictCursor
 from config import (MAX_SONGS_PER_CLUSTER, MOOD_LABELS, STRATIFIED_GENRES,
                     MUTATION_KMEANS_COORD_FRACTION, MUTATION_INT_ABS_DELTA, MUTATION_FLOAT_ABS_DELTA,
                     TOP_N_ELITES, EXPLOITATION_START_FRACTION, EXPLOITATION_PROBABILITY_CONFIG,
-                    SAMPLING_PERCENTAGE_CHANGE_PER_RUN, ITERATIONS_PER_BATCH_JOB, MAX_CONCURRENT_BATCH_JOBS)
+                    SAMPLING_PERCENTAGE_CHANGE_PER_RUN, ITERATIONS_PER_BATCH_JOB, MAX_CONCURRENT_BATCH_JOBS,
+                    MIN_PLAYLIST_SIZE_FOR_TOP_N)
 
 # Import AI naming function and prompt template
 from ai import get_ai_playlist_name, creative_prompt_template
@@ -785,9 +786,21 @@ def _select_top_n_diverse_playlists(best_result, n):
 
     logger.info(f"Starting selection of Top {n} diverse playlists from {len(playlist_to_vector)} candidates.")
 
+    # --- NEW: Separate playlists by size ---
+    large_playlist_names = {name for name, songs in original_playlists.items() if len(songs) >= MIN_PLAYLIST_SIZE_FOR_TOP_N}
+    
+    # First, try to select from large playlists
+    large_playlist_vectors = {name: vec for name, vec in playlist_to_vector.items() if name in large_playlist_names}
+    
     # Convert to lists for easier indexing
-    available_names = list(playlist_to_vector.keys())
-    available_vectors = np.array(list(playlist_to_vector.values()))
+    if len(large_playlist_vectors) >= n:
+        logger.info(f"Found {len(large_playlist_vectors)} playlists with >= {MIN_PLAYLIST_SIZE_FOR_TOP_N} songs. Selecting from this pool.")
+        available_names = list(large_playlist_vectors.keys())
+        available_vectors = np.array(list(large_playlist_vectors.values()))
+    else:
+        logger.info(f"Only {len(large_playlist_vectors)} playlists have >= {MIN_PLAYLIST_SIZE_FOR_TOP_N} songs. Using all {len(playlist_to_vector)} playlists for selection.")
+        available_names = list(playlist_to_vector.keys())
+        available_vectors = np.array(list(playlist_to_vector.values()))
 
     if available_vectors.shape[0] <= n:
         return best_result
