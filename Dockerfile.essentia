@@ -51,7 +51,8 @@ RUN pip3 install --no-cache-dir \
     flasgger \
     sqlglot \
     google-generativeai \
-    mistralai
+    mistralai \
+    python-mpd2
 
 # Install essentia
 RUN pip3 install --no-cache-dir essentia-tensorflow
