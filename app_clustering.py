@@ -33,14 +33,18 @@ def clustering_task_failure_handler(job, connection, type, value, tb):
     with app.app_context():
         task_id = job.get_id()
         
-        # --- FIX: Use traceback.format_exception for reliable formatting ---
-        formatted_traceback = "".join(traceback.format_exception(type, value, tb))
+        # --- FIX: Handle different traceback types, especially from rq-janitor ---
+        tb_formatted = ""
+        if isinstance(tb, traceback.StackSummary):
+            tb_formatted = "".join(tb.format())
+        else:
+            tb_formatted = "".join(traceback.format_exception(type, value, tb))
 
         error_details = {
             "message": "Clustering task failed permanently after all retries.",
             "error_type": str(type.__name__),
             "error_value": str(value),
-            "traceback": formatted_traceback
+            "traceback": tb_formatted
         }
         save_task_status(
             task_id,

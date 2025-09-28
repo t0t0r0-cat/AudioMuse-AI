@@ -28,8 +28,11 @@ def collection_task_failure_handler(job, connection, type, value, tb):
             "message": "Task failed permanently after all retries.",
             "error_type": str(type.__name__),
             "error_value": str(value),
-            # MODIFIED: Use the more robust format_exception to handle all traceback types
-            "traceback": "".join(traceback.format_exception(type, value, tb))
+            # --- FIX: Handle different traceback types, especially from rq-janitor ---
+            "traceback": "".join(
+                tb.format() if isinstance(tb, traceback.StackSummary)
+                else traceback.format_exception(type, value, tb)
+            )
         }
         save_task_status(
             task_id,
@@ -133,4 +136,3 @@ def get_last_collection_task():
         return jsonify(last_task_data), 200
         
     return jsonify({"status": "NO_PREVIOUS_TASK"}), 200
-
