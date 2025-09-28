@@ -504,8 +504,8 @@ def get_music_map_data_endpoint():
     from app import get_db
     import numpy as np  # Import numpy at the beginning of the function
     from config import STRATIFIED_GENRES  # Import stratified genres from config
-    
-    limit = request.args.get('limit', 10000, type=int)  # Reduced to 10,000 for better performance
+
+    limit = request.args.get('limit', 100, type=int) 
     offset = request.args.get('offset', 0, type=int)
     
     try:
