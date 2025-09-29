@@ -9,20 +9,22 @@
   <img src="https://github.com/NeptuneHub/AudioMuse-AI/blob/main/screenshot/audiomuseai.png?raw=true" alt="AudioMuse-AI Logo" width="480">
 </p>
 
+AudioMuse-AI is an Open Source Dockerized environment that brings **automatic playlist generation** to your self-hosted music library. Using powerful tools like [Librosa](https://github.com/librosa/librosa) and [Tensorflow](https://www.tensorflow.org/), it performs **sonic analysis** on your audio files locally, allowing you to curate the perfect playlist for any mood or occasion without relying on external APIs. 
 
+Deploy it easily on your local machine with Docker Compose/Podman or scale it up in your Kubernetes cluster, with the support of **AMD64** and **ARM64** architecture. It support with API integration the main Music server like [Jellyfin](https://jellyfin.org), [Navidrome](https://www.navidrome.org/), [LMS](https://github.com/epoupon/lms/tree/master) and [Lyrion](https://lyrion.org/) and many mores will come in the future.
 
-AudioMuse-AI is an Open Source Dockerized environment that brings smart playlist generation to [Jellyfin](https://jellyfin.org), [Navidrome](https://www.navidrome.org/) and [Lyrion](https://lyrion.org/) using sonic audio analysis via  [Librosa](https://github.com/librosa/librosa), [Tensorflow](https://www.tensorflow.org/)  and AI models. All you need is in a container that you can deploy locally or on your Kubernetes cluster (tested on K3S). In this repo you will find deployment examples for Kubernetes, Podman, and Docker Compose.
-
-With Navidrome we support Subsonic API, so additional Mediaserver with Subsonic APi will work like [LMS](https://github.com/epoupon/lms/tree/master). For them just refear to the instruction for Navidrome.
+AudioMuse-AI offers several unique ways to rediscover your music collection:
+* **Clustering**: Automatically groups sonically similar songs, creating genre-defying playlists based on the music's actual sound.
+* **Playlist from Similar Songs**: Pick a track you love, and AudioMuse-AI will find all the songs in your library that share its sonic signature, creating a new discovery playlist.
+* **Song Paths**: Create a seamless listening journey between two or more songs. AudioMuse-AI finds the perfect tracks to bridge the sonic gap.
+* **Instant Playlists**: Simply tell the AI what you want to hear—like "high-tempo, low-energy workout music"—and it will instantly generate a playlist for you.
+* **Sonic Fingerprint**: Generates playlists based on your listening habits, finding tracks similar to what you've been playing most often.
 
 Addional important information on this project can also be found here:
 * Mkdocs version of this README.md for better visualizzation: [Neptunehub AudioMuse-AI DOCS](https://neptunehub.github.io/AudioMuse-AI/)
 
 **IMPORTANT:** This is an **BETA** (yes we passed from ALPHA to BETA finally!) open-source project I’m developing just for fun. All the source code is fully open and visible. It’s intended only for testing purposes, not for production environments. Please use it at your own risk. I cannot be held responsible for any issues or damages that may occur.
 
-The **supported architecture** are:
-* **amd64**: Supported
-* **arm64**: Supported
 
 **The full list or AudioMuse-AI related repository are:** 
   > * [AudioMuse-AI](https://github.com/NeptuneHub/AudioMuse-AI): the core application, it run Flask and Worker containers to actually run all the feature;
