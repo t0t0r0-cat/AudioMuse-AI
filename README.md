@@ -13,7 +13,7 @@ AudioMuse-AI is an Open Source Dockerized environment that brings **automatic pl
 
 Deploy it easily on your local machine with Docker Compose/Podman or scale it up in your Kubernetes cluster, with the support of **AMD64** and **ARM64** architecture. It integrate with API the main Music server like [Jellyfin](https://jellyfin.org), [Navidrome](https://www.navidrome.org/), [LMS](https://github.com/epoupon/lms/tree/master), [Lyrion](https://lyrion.org/) and many mores will come in the future.
 
-AudioMuse-AI offers several unique ways to rediscover your music collection:
+AudioMuse-AI lets you explore your music library in innovative ways, just **start with an initial analysis**, and you’ll unlock features like:
 * **Clustering**: Automatically groups sonically similar songs, creating genre-defying playlists based on the music's actual sound.
 * **Playlist from Similar Songs**: Pick a track you love, and AudioMuse-AI will find all the songs in your library that share its sonic signature, creating a new discovery playlist.
 * **Song Paths**: Create a seamless listening journey between two or more songs. AudioMuse-AI finds the perfect tracks to bridge the sonic gap.
