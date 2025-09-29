@@ -313,7 +313,20 @@ def get_tracks_from_album(album_id):
 
     if response and "titles_loop" in response:
         songs = response["titles_loop"]
-        return [{'Id': s.get('id'), 'Name': s.get('title'), 'AlbumArtist': s.get('artist'), 'Path': s.get('url'), 'url': s.get('url')} for s in songs]
+        
+        # Filter out tracks that are from Spotify, as they cannot be downloaded directly.
+        local_songs = [s for s in songs if s.get('genre') != 'Spotify']
+        
+        if len(local_songs) < len(songs):
+            skipped_count = len(songs) - len(local_songs)
+            logger.info(f"Skipping {skipped_count} track(s) from album {album_id} because they are from Spotify.")
+        
+        # If all tracks were from Spotify, the album will be empty. Log this case.
+        if not local_songs and songs:
+            logger.info(f"Album {album_id} contains only Spotify tracks and will be skipped as no tracks can be downloaded.")
+            
+        # Map Lyrion API keys to our standard format.
+        return [{'Id': s.get('id'), 'Name': s.get('title'), 'AlbumArtist': s.get('artist'), 'Path': s.get('url'), 'url': s.get('url')} for s in local_songs]
     
     logger.warning(f"Lyrion API response for tracks of album {album_id} did not contain the 'titles_loop' key or was empty.")
     return []

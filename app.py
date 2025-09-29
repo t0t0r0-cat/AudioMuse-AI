@@ -124,122 +124,142 @@ def close_db(e=None):
 
 def init_db():
     db = get_db()
-    cur = db.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS score (
-            item_id TEXT PRIMARY KEY,
-            title TEXT,
-            author TEXT,
-            tempo REAL,
-            key TEXT,
-            scale TEXT,
-            mood_vector TEXT
-        )
-    """)
-    # Check if the 'energy' column exists and add it if not
-    cur.execute("""
-        SELECT EXISTS (
-            SELECT 1
-            FROM information_schema.columns
-            WHERE table_name = 'score' AND column_name = 'energy'
-        )
-    """)
-    column_exists_energy = cur.fetchone()[0]
-    if not column_exists_energy:
-        app.logger.info("Adding 'energy' column to the 'score' table.")
-        cur.execute("ALTER TABLE score ADD COLUMN energy REAL")
-    # Check if the 'other_features' column exists and add it if not
-    cur.execute("""
-        SELECT EXISTS (
-            SELECT 1
-            FROM information_schema.columns
-            WHERE table_name = 'score' AND column_name = 'other_features'
-        )
-    """)
-    column_exists = cur.fetchone()[0]
-    if not column_exists:
-        app.logger.info("Adding 'other_features' column to the 'score' table.")
-        cur.execute("ALTER TABLE score ADD COLUMN other_features TEXT")
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS playlist (
-            id SERIAL PRIMARY KEY,
-            playlist_name TEXT,
-            item_id TEXT,
-            title TEXT,
-            author TEXT,
-            UNIQUE (playlist_name, item_id)
-        )
-    """)
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS task_status (
-            id SERIAL PRIMARY KEY,
-            task_id TEXT UNIQUE NOT NULL,
-            parent_task_id TEXT,
-            task_type TEXT NOT NULL,
-            sub_type_identifier TEXT,
-            status TEXT,
-            progress INTEGER DEFAULT 0,
-            details TEXT,
-            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    
-    # --- Migration for start_time and end_time to DOUBLE PRECISION for Unix timestamps ---
-    for col_name in ['start_time', 'end_time']:
+    with db.cursor() as cur:
+        # Create 'score' table
+        try:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS score (
+                    item_id TEXT PRIMARY KEY,
+                    title TEXT,
+                    author TEXT,
+                    tempo REAL,
+                    key TEXT,
+                    scale TEXT,
+                    mood_vector TEXT
+                )
+            """)
+        except psycopg2.errors.UniqueViolation as e:
+            logger.warning(f"Ignoring table creation error (likely a race condition): {e}")
+            db.rollback()
+
+        # Check for and add 'energy' column to 'score' table
         cur.execute("""
-            SELECT data_type FROM information_schema.columns 
-            WHERE table_name = 'task_status' AND column_name = %s
-        """, (col_name,))
-        result = cur.fetchone()
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'score' AND column_name = 'energy'
+            )
+        """)
+        if not cur.fetchone()[0]:
+            app.logger.info("Adding 'energy' column to the 'score' table.")
+            cur.execute("ALTER TABLE score ADD COLUMN energy REAL")
+
+        # Check for and add 'other_features' column to 'score' table
+        cur.execute("""
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'score' AND column_name = 'other_features'
+            )
+        """)
+        if not cur.fetchone()[0]:
+            app.logger.info("Adding 'other_features' column to the 'score' table.")
+            cur.execute("ALTER TABLE score ADD COLUMN other_features TEXT")
+
+        # Create 'playlist' table
+        try:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS playlist (
+                    id SERIAL PRIMARY KEY,
+                    playlist_name TEXT,
+                    item_id TEXT,
+                    title TEXT,
+                    author TEXT,
+                    UNIQUE (playlist_name, item_id)
+                )
+            """)
+        except psycopg2.errors.UniqueViolation as e:
+            logger.warning(f"Ignoring table creation error (likely a race condition): {e}")
+            db.rollback()
+
+        # Create 'task_status' table
+        try:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS task_status (
+                    id SERIAL PRIMARY KEY,
+                    task_id TEXT UNIQUE NOT NULL,
+                    parent_task_id TEXT,
+                    task_type TEXT NOT NULL,
+                    sub_type_identifier TEXT,
+                    status TEXT,
+                    progress INTEGER DEFAULT 0,
+                    details TEXT,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+        except psycopg2.errors.UniqueViolation as e:
+            logger.warning(f"Ignoring table creation error (likely a race condition): {e}")
+            db.rollback()
+
+        # Migration for start_time and end_time columns
+        for col_name in ['start_time', 'end_time']:
+            cur.execute("""
+                SELECT data_type FROM information_schema.columns 
+                WHERE table_name = 'task_status' AND column_name = %s
+            """, (col_name,))
+            result = cur.fetchone()
+            
+            if not result:
+                app.logger.info(f"Adding '{col_name}' column of type DOUBLE PRECISION to 'task_status' table.")
+                cur.execute(f"ALTER TABLE task_status ADD COLUMN {col_name} DOUBLE PRECISION")
+            elif 'timestamp' in result[0]:
+                app.logger.warning(f"'{col_name}' column is of type {result[0]}. Migrating to DOUBLE PRECISION. Historical timing data in this column will be lost.")
+                cur.execute(f"ALTER TABLE task_status DROP COLUMN {col_name}")
+                cur.execute(f"ALTER TABLE task_status ADD COLUMN {col_name} DOUBLE PRECISION")
+
+        # Create 'embedding' table
+        try:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS embedding (
+                    item_id TEXT PRIMARY KEY,
+                    FOREIGN KEY (item_id) REFERENCES score (item_id) ON DELETE CASCADE
+                )
+            """)
+        except psycopg2.errors.UniqueViolation as e:
+            logger.warning(f"Ignoring table creation error (likely a race condition): {e}")
+            db.rollback()
+            
+        # Check for and add 'embedding' column to 'embedding' table
+        cur.execute("""
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'embedding' AND column_name = 'embedding'
+            )
+        """)
+        if not cur.fetchone()[0]:
+            app.logger.info("Adding 'embedding' column of type BYTEA to the 'embedding' table.")
+            cur.execute("ALTER TABLE embedding ADD COLUMN embedding BYTEA")
         
-        # If column doesn't exist, add it as DOUBLE PRECISION
-        if not result:
-            app.logger.info(f"Adding '{col_name}' column of type DOUBLE PRECISION to 'task_status' table.")
-            cur.execute(f"ALTER TABLE task_status ADD COLUMN {col_name} DOUBLE PRECISION")
-        # If column exists and is a timestamp type, migrate it
-        elif 'timestamp' in result[0]:
-            app.logger.warning(f"'{col_name}' column is of type {result[0]}. Migrating to DOUBLE PRECISION. Historical timing data in this column will be lost.")
-            cur.execute(f"ALTER TABLE task_status DROP COLUMN {col_name}")
-            cur.execute(f"ALTER TABLE task_status ADD COLUMN {col_name} DOUBLE PRECISION")
+        # Create 'voyager_index_data' table
+        try:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS voyager_index_data (
+                    index_name VARCHAR(255) PRIMARY KEY,
+                    index_data BYTEA NOT NULL,
+                    id_map_json TEXT NOT NULL,
+                    embedding_dimension INTEGER NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+        except psycopg2.errors.UniqueViolation as e:
+            logger.warning(f"Ignoring table creation error (likely a race condition): {e}")
+            db.rollback()
 
-    # Create the embedding table if it doesn't exist
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS embedding (
-            item_id TEXT PRIMARY KEY,
-            FOREIGN KEY (item_id) REFERENCES score (item_id) ON DELETE CASCADE
-        )
-    """)
-    # Check if the 'embedding' column exists in the 'embedding' table and add it if not
-    cur.execute("""
-        SELECT EXISTS (
-            SELECT 1
-            FROM information_schema.columns
-            WHERE table_name = 'embedding' AND column_name = 'embedding'
-        )
-    """)
-    column_exists_embedding = cur.fetchone()[0]
-    if not column_exists_embedding:
-        app.logger.info("Adding 'embedding' column of type BYTEA to the 'embedding' table.")
-        cur.execute("ALTER TABLE embedding ADD COLUMN embedding BYTEA")
+        # Drop obsolete tables
+        cur.execute("DROP TABLE IF EXISTS annoy_index;")
+        cur.execute("DROP TABLE IF EXISTS annoy_mappings;")
 
-    # --- NEW: Table for Voyager index data ---
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS voyager_index_data (
-            index_name VARCHAR(255) PRIMARY KEY,
-            index_data BYTEA NOT NULL,
-            id_map_json TEXT NOT NULL,
-            embedding_dimension INTEGER NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
+        app.logger.info("Database tables checked/created successfully.")
+        db.commit()
 
-    # Drop obsolete tables if they exist
-    cur.execute("DROP TABLE IF EXISTS annoy_index;")
-    cur.execute("DROP TABLE IF EXISTS annoy_mappings;")
-
-    app.logger.info("Database tables checked/created successfully.")
-    db.commit()
-    cur.close()
 
 # Initialize the database schema when the application module is loaded.
 # This is safe because it doesn't import other application modules.
