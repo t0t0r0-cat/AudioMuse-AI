@@ -47,7 +47,7 @@ document.addEventListener('DOMContentLoaded', function() {
         //{ href: '/music_map', text: 'Music Map (t-SNE)' },
         { href: '/path', text: 'Song Path' },
         { href: '/sonic_fingerprint', text: 'Sonic Fingerprint' },
-        { href: '/collection', text: 'Collection Sync' }, // New Menu Item - commented because still experimental
+        //{ href: '/collection', text: 'Collection Sync' }, // New Menu Item - commented because still experimental
         { href: '/cleaning', text: 'Cleaning' }
     ];
 
