@@ -68,6 +68,16 @@ The best way to install AudioMuse-AI on K3S (kubernetes) is by [AudioMuse-AI Hel
 
 You can directly check the Helm Chart repo for more details and deployments examples.
 
+How to find jellyfin **userid**:
+* Log into Jellyfin from your browser as an admin
+* Go to Dashboard > “admin panel” > Users.
+* Click on the user’s name that you are interested
+* The User ID is visible in the URL (is the part just after = ):
+  * http://your-jellyfin-server/web/index.html#!/useredit.html?userId=xxxxx
+
+How to create an the **jellyfin's API token**:
+* The API Token, still as admin you can go to Dashboard > “Admin panel” > API Key and create a new one.
+
 ## **Quick Start Deployment on K3S**
 
 This section provides a minimal guide to deploy AudioMuse-AI on a K3S (Kubernetes) cluster by direct use of `deployment`
