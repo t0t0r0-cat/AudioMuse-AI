@@ -22,7 +22,7 @@ def generate_sonic_fingerprint(num_neighbors=None, user_creds=None):
                                      For Jellyfin: {'user_id': '...', 'token': '...'}
                                      For Navidrome: {'user': '...', 'password': '...'}
     """
-    from app import get_tracks_by_ids
+    from app_helper import get_tracks_by_ids
     logger.info("Generating sonic fingerprint...")
 
     # Determine the total desired size for the final playlist

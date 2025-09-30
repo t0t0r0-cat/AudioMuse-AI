@@ -80,8 +80,8 @@ def start_analysis_endpoint():
       500:
         description: Server error during task enqueue.
     """
-    # Local import to prevent circular dependency at startup
-    from app import clean_up_previous_main_tasks, save_task_status, TASK_STATUS_PENDING, rq_queue_high
+    # Local imports to prevent circular dependency at startup
+    from app_helper import rq_queue_high, clean_up_previous_main_tasks, save_task_status, TASK_STATUS_PENDING
 
     data = request.json or {}
     # MODIFIED: Removed jellyfin_url, jellyfin_user_id, and jellyfin_token as they are no longer passed to the task.
@@ -136,8 +136,8 @@ def start_cleaning_endpoint():
       500:
         description: Server error during task enqueue.
     """
-    # Local import to prevent circular dependency at startup
-    from app import clean_up_previous_main_tasks, save_task_status, TASK_STATUS_PENDING, rq_queue_high
+    # Local imports to prevent circular dependency at startup
+    from app_helper import rq_queue_high, clean_up_previous_main_tasks, save_task_status, TASK_STATUS_PENDING
 
     # Clean up any previous cleaning tasks
     clean_up_previous_main_tasks()
@@ -154,5 +154,3 @@ def start_cleaning_endpoint():
         job_timeout=-1 # No timeout
     )
     return jsonify({"task_id": job.id, "task_type": "cleaning", "status": job.get_status()}), 202
-
-

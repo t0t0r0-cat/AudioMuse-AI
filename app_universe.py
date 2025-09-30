@@ -141,7 +141,7 @@ def get_graph_data_endpoint():
     Uses the in-memory voyager index directly.
     """
     from tasks.voyager_manager import voyager_index, id_map, find_nearest_neighbors_by_id
-    from app import get_db
+    from app_helper import get_db
     
     limit = request.args.get('limit', 1000, type=int)
     offset = request.args.get('offset', 0, type=int)
@@ -301,7 +301,7 @@ def get_centered_graph_data_endpoint():
     Uses the in-memory voyager index directly.
     """
     from tasks.voyager_manager import voyager_index, id_map, find_nearest_neighbors_by_id
-    from app import get_db
+    from app_helper import get_db
     
     item_id = request.args.get('item_id', '')
     limit = request.args.get('limit', 100, type=int)
@@ -501,7 +501,7 @@ def get_music_map_data_endpoint():
     Get all songs positioned using t-SNE dimensionality reduction of their embeddings.
     This creates a 2D map where similar songs are positioned close to each other.
     """
-    from app import get_db
+    from app_helper import get_db
     import numpy as np  # Import numpy at the beginning of the function
     from config import STRATIFIED_GENRES  # Import stratified genres from config
 

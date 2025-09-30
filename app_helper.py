@@ -1,0 +1,489 @@
+# app_helper.py
+import json
+import logging
+import os
+import time
+import psycopg2
+from psycopg2.extras import DictCursor
+import numpy as np
+from flask import g
+
+# RQ imports
+from redis import Redis
+from rq import Queue, Retry
+from rq.job import Job, JobStatus
+from rq.exceptions import NoSuchJobError
+
+# Import from main app
+# We import 'app' to use its context (e.g., for logging)
+# Note: get_db, redis_conn will now be defined *in this file*.
+
+# Import configuration
+from config import DATABASE_URL, REDIS_URL
+
+# Import RQ specifics
+from rq.command import send_stop_job_command
+
+logger = logging.getLogger(__name__)
+
+# Import app object after it's defined to break circular dependency
+# Avoid importing the Flask `app` object here to prevent circular imports.
+# Use the module-level `logger` defined above for logging instead of `app.logger`.
+
+# --- Constants ---
+MAX_LOG_ENTRIES_STORED = 10 # Max number of recent log entries to store in the database per task
+
+# --- RQ Setup ---
+redis_conn = Redis.from_url(REDIS_URL, socket_connect_timeout=15, socket_timeout=15)
+rq_queue_high = Queue('high', connection=redis_conn, default_timeout=-1) # High priority for main tasks
+rq_queue_default = Queue('default', connection=redis_conn, default_timeout=-1) # Default queue for sub-tasks
+
+# --- Database Setup (PostgreSQL) ---
+def get_db():
+    if 'db' not in g:
+        try:
+            g.db = psycopg2.connect(
+                DATABASE_URL,
+                connect_timeout=30,        # Time to establish connection (increased from 15)
+                keepalives_idle=600,       # Start keepalives after 10 min idle
+                keepalives_interval=30,    # Send keepalive every 30 sec
+                keepalives_count=3,        # 3 failed keepalives = dead connection
+                options='-c statement_timeout=300000'  # 5 min query timeout (300 seconds)
+            )
+        except psycopg2.OperationalError as e:
+            logger.error(f"Failed to connect to database: {e}")
+            raise # Re-raise to ensure the operation that needed the DB fails clearly
+    return g.db
+
+def close_db(e=None):
+    db = g.pop('db', None)
+    if db is not None:
+        db.close()
+
+def init_db():
+    db = get_db()
+    with db.cursor() as cur:
+        # Create 'score' table
+        cur.execute("CREATE TABLE IF NOT EXISTS score (item_id TEXT PRIMARY KEY, title TEXT, author TEXT, tempo REAL, key TEXT, scale TEXT, mood_vector TEXT)")
+        # Add 'energy' column if not exists
+        cur.execute("SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'score' AND column_name = 'energy')")
+        if not cur.fetchone()[0]:
+            logger.info("Adding 'energy' column to 'score' table.")
+            cur.execute("ALTER TABLE score ADD COLUMN energy REAL")
+        # Add 'other_features' column if not exists
+        cur.execute("SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'score' AND column_name = 'other_features')")
+        if not cur.fetchone()[0]:
+            logger.info("Adding 'other_features' column to 'score' table.")
+            cur.execute("ALTER TABLE score ADD COLUMN other_features TEXT")
+        # Create 'playlist' table
+        cur.execute("CREATE TABLE IF NOT EXISTS playlist (id SERIAL PRIMARY KEY, playlist_name TEXT, item_id TEXT, title TEXT, author TEXT, UNIQUE (playlist_name, item_id))")
+        # Create 'task_status' table
+        cur.execute("CREATE TABLE IF NOT EXISTS task_status (id SERIAL PRIMARY KEY, task_id TEXT UNIQUE NOT NULL, parent_task_id TEXT, task_type TEXT NOT NULL, sub_type_identifier TEXT, status TEXT, progress INTEGER DEFAULT 0, details TEXT, timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
+        # Migrate 'start_time' and 'end_time' columns
+        for col_name in ['start_time', 'end_time']:
+            cur.execute("SELECT data_type FROM information_schema.columns WHERE table_name = 'task_status' AND column_name = %s", (col_name,))
+            if not cur.fetchone(): cur.execute(f"ALTER TABLE task_status ADD COLUMN {col_name} DOUBLE PRECISION")
+        # Create 'embedding' table
+        cur.execute("CREATE TABLE IF NOT EXISTS embedding (item_id TEXT PRIMARY KEY, FOREIGN KEY (item_id) REFERENCES score (item_id) ON DELETE CASCADE)")
+        cur.execute("SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'embedding' AND column_name = 'embedding')")
+        if not cur.fetchone()[0]: cur.execute("ALTER TABLE embedding ADD COLUMN embedding BYTEA")
+        # Create 'voyager_index_data' table
+        cur.execute("CREATE TABLE IF NOT EXISTS voyager_index_data (index_name VARCHAR(255) PRIMARY KEY, index_data BYTEA NOT NULL, id_map_json TEXT NOT NULL, embedding_dimension INTEGER NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
+        db.commit()
+
+# --- Status Constants ---
+TASK_STATUS_PENDING = "PENDING"
+TASK_STATUS_STARTED = "STARTED"
+TASK_STATUS_PROGRESS = "PROGRESS"
+TASK_STATUS_SUCCESS = "SUCCESS"
+TASK_STATUS_FAILURE = "FAILURE"
+TASK_STATUS_REVOKED = "REVOKED"
+
+# --- DB Cleanup Utility ---
+def clean_up_previous_main_tasks():
+    """
+    Cleans up all previous main tasks before a new one starts.
+    - Archives tasks in SUCCESS state.
+    - Archives stale tasks stuck in PENDING, STARTED, or PROGRESS states.
+    A main task is identified by having a NULL parent_task_id.
+    """
+    db = get_db() # This now calls the function within this file
+    cur = db.cursor(cursor_factory=DictCursor)
+    logger.info("Starting cleanup of all previous main tasks.")
+    
+    non_terminal_statuses = (TASK_STATUS_PENDING, TASK_STATUS_STARTED, TASK_STATUS_PROGRESS, TASK_STATUS_SUCCESS)
+    
+    try:
+        cur.execute("SELECT task_id, status, details, task_type FROM task_status WHERE status IN %s AND parent_task_id IS NULL", (non_terminal_statuses,))
+        tasks_to_archive = cur.fetchall()
+
+        archived_count = 0
+        for task_row in tasks_to_archive:
+            task_id = task_row['task_id']
+            original_status = task_row['status']
+            
+            original_details_json = task_row['details']
+            original_status_message = f"Task was in '{original_status}' state."
+
+            if original_details_json:
+                try:
+                    original_details_dict = json.loads(original_details_json)
+                    original_status_message = original_details_dict.get("status_message", original_status_message)
+                except (json.JSONDecodeError, TypeError):
+                     logger.warning(f"Could not parse original details for task {task_id} during archival.")
+
+            if original_status == TASK_STATUS_SUCCESS:
+                archival_reason = "New main task started, old successful task archived."
+            else:
+                archival_reason = f"New main task started, stale task (status: {original_status}) has been archived."
+
+            archived_details = {
+                "log": [f"[Archived] {archival_reason}. Original summary: {original_status_message}"],
+                "original_status_before_archival": original_status,
+                "archival_reason": archival_reason
+            }
+            archived_details_json = json.dumps(archived_details)
+
+            with db.cursor() as update_cur:
+                update_cur.execute(
+                    "UPDATE task_status SET status = %s, details = %s, progress = 100, timestamp = NOW() WHERE task_id = %s AND status = %s",
+                    (TASK_STATUS_REVOKED, archived_details_json, task_id, original_status)
+                )
+            archived_count += 1
+
+        if archived_count > 0:
+            db.commit()
+            logger.info(f"Archived {archived_count} previous main tasks.")
+        else:
+            logger.info("No previous main tasks found to clean up.")
+    except Exception as e_main_clean:
+        db.rollback()
+        logger.error(f"Error during the main task cleanup process: {e_main_clean}")
+    finally:
+        cur.close()
+
+
+# --- DB Utility Functions (used by tasks.py and API) ---
+def save_task_status(task_id, task_type, status=TASK_STATUS_PENDING, parent_task_id=None, sub_type_identifier=None, progress=0, details=None):
+    """
+    Saves or updates a task's status in the database, using Unix timestamps for start and end times.
+    """
+    db = get_db() # This now calls the function within this file
+    cur = db.cursor()
+    current_unix_time = time.time()
+
+    if details is not None and isinstance(details, dict):
+        # Log truncation logic remains the same
+        if status != TASK_STATUS_SUCCESS and 'log' in details and isinstance(details['log'], list):
+            log_list = details['log']
+            if len(log_list) > MAX_LOG_ENTRIES_STORED:
+                original_log_length = len(log_list)
+                details['log'] = log_list[-MAX_LOG_ENTRIES_STORED:]
+                details['log_storage_info'] = f"Log in DB truncated to last {MAX_LOG_ENTRIES_STORED} entries. Original length: {original_log_length}."
+            else:
+                details.pop('log_storage_info', None)
+        elif status == TASK_STATUS_SUCCESS:
+            details.pop('log_storage_info', None)
+            if 'log' not in details or not isinstance(details.get('log'), list) or not details.get('log'):
+                details['log'] = ["Task completed successfully."]
+
+    details_json = json.dumps(details) if details is not None else None
+    
+    try:
+        # This query now handles start_time and end_time using Unix timestamps
+        cur.execute("""
+            INSERT INTO task_status (task_id, parent_task_id, task_type, sub_type_identifier, status, progress, details, timestamp, start_time, end_time)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), %s, CASE WHEN %s IN ('SUCCESS', 'FAILURE', 'REVOKED') THEN %s ELSE NULL END)
+            ON CONFLICT (task_id) DO UPDATE SET
+                status = EXCLUDED.status,
+                parent_task_id = EXCLUDED.parent_task_id,
+                sub_type_identifier = EXCLUDED.sub_type_identifier,
+                progress = EXCLUDED.progress,
+                details = EXCLUDED.details,
+                timestamp = NOW(),
+                start_time = COALESCE(task_status.start_time, %s),
+                end_time = CASE
+                                WHEN EXCLUDED.status IN ('SUCCESS', 'FAILURE', 'REVOKED') AND task_status.end_time IS NULL
+                                THEN %s
+                                ELSE task_status.end_time
+                           END
+        """, (task_id, parent_task_id, task_type, sub_type_identifier, status, progress, details_json, current_unix_time, status, current_unix_time, current_unix_time, current_unix_time))
+        db.commit()
+    except psycopg2.Error as e:
+        logger.error(f"DB Error saving task status for {task_id}: {e}")
+        try:
+            db.rollback()
+            logger.info(f"DB transaction rolled back for task status update of {task_id}.")
+        except psycopg2.Error as rb_e:
+            logger.error(f"DB Error during rollback for task status {task_id}: {rb_e}")
+    finally:
+        cur.close()
+
+
+def get_task_info_from_db(task_id):
+    """Fetches task info from DB and calculates running time in Python."""
+    db = get_db() # This now calls the function within this file
+    cur = db.cursor(cursor_factory=DictCursor)
+    # Fetch raw columns including the Unix timestamps
+    cur.execute("""
+        SELECT 
+            task_id, parent_task_id, task_type, sub_type_identifier, status, progress, details, timestamp, start_time, end_time
+        FROM task_status 
+        WHERE task_id = %s
+    """, (task_id,))
+    row = cur.fetchone()
+    cur.close()
+    if not row:
+        return None
+    
+    row_dict = dict(row)
+    current_unix_time = time.time()
+    
+    start_time = row_dict.get('start_time')
+    end_time = row_dict.get('end_time')
+
+    # If start_time is null (old record or pre-start), duration is 0.
+    if start_time is None:
+        row_dict['running_time_seconds'] = 0.0
+    else:
+        # If end_time is null, task is running. Use current time.
+        effective_end_time = end_time if end_time is not None else current_unix_time
+        row_dict['running_time_seconds'] = max(0, effective_end_time - start_time)
+        
+    return row_dict
+
+def get_child_tasks_from_db(parent_task_id):
+    """Fetches all child tasks for a given parent_task_id from the database."""
+    conn = get_db() # This now calls the function within this file
+    cur = conn.cursor(cursor_factory=DictCursor)
+    # MODIFIED: Select the 'details' column as well for the final check.
+    cur.execute("SELECT task_id, status, sub_type_identifier, details FROM task_status WHERE parent_task_id = %s", (parent_task_id,))
+    tasks = cur.fetchall()
+    cur.close()
+    # DictCursor returns a list of dictionary-like objects, convert to plain dicts
+    return [dict(row) for row in tasks]
+
+def track_exists(item_id):
+    """
+    Checks if a track exists in the database AND has been analyzed for key features.
+    in both the 'score' and 'embedding' tables.
+    Returns True if:
+    1. The track exists in 'score' table and 'other_features', 'energy', 'mood_vector', and 'tempo' are populated.
+    2. The track exists in the 'embedding' table.
+    Returns False otherwise, indicating a re-analysis is needed.
+    """
+    conn = get_db() # This now calls the function within this file
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT s.item_id
+        FROM score s
+        JOIN embedding e ON s.item_id = e.item_id
+        WHERE s.item_id = %s
+          AND s.other_features IS NOT NULL AND s.other_features != ''
+          AND s.energy IS NOT NULL
+          AND s.mood_vector IS NOT NULL AND s.mood_vector != ''
+          AND s.tempo IS NOT NULL
+    """, (item_id,))
+    row = cur.fetchone()
+    cur.close()
+    return row is not None
+
+def save_track_analysis_and_embedding(item_id, title, author, tempo, key, scale, moods, embedding_vector, energy=None, other_features=None):
+    """Saves track analysis and embedding in a single transaction."""
+    # Sanitize string inputs to remove NUL characters
+    title = title.replace('\x00', '') if title else title
+    author = author.replace('\x00', '') if author else author
+    key = key.replace('\x00', '') if key else key
+    scale = scale.replace('\x00', '') if scale else scale
+    other_features = other_features.replace('\x00', '') if other_features else other_features
+
+    mood_str = ','.join(f"{k}:{v:.3f}" for k, v in moods.items())
+    
+    conn = get_db() # This now calls the function within this file
+    cur = conn.cursor()
+    try:
+        # Save analysis to score table
+        cur.execute("""
+            INSERT INTO score (item_id, title, author, tempo, key, scale, mood_vector, energy, other_features)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (item_id) DO UPDATE SET
+                title = EXCLUDED.title,
+                author = EXCLUDED.author,
+                tempo = EXCLUDED.tempo,
+                key = EXCLUDED.key,
+                scale = EXCLUDED.scale,
+                mood_vector = EXCLUDED.mood_vector,
+                energy = EXCLUDED.energy,
+                other_features = EXCLUDED.other_features
+        """, (item_id, title, author, tempo, key, scale, mood_str, energy, other_features))
+
+        # Save embedding
+        if isinstance(embedding_vector, np.ndarray) and embedding_vector.size > 0:
+            embedding_blob = embedding_vector.astype(np.float32).tobytes()
+            cur.execute("""
+                INSERT INTO embedding (item_id, embedding) VALUES (%s, %s)
+                ON CONFLICT (item_id) DO UPDATE SET embedding = EXCLUDED.embedding
+            """, (item_id, psycopg2.Binary(embedding_blob)))
+
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        logger.error("Error saving track analysis and embedding for %s: %s", item_id, e)
+        raise
+    finally:
+        cur.close()
+
+def get_all_tracks():
+    """Fetches all tracks and their embeddings from the database."""
+    conn = get_db() # This now calls the function within this file
+    cur = conn.cursor(cursor_factory=DictCursor)
+    cur.execute("""
+        SELECT s.item_id, s.title, s.author, s.tempo, s.key, s.scale, s.mood_vector, s.energy, s.other_features, e.embedding
+        FROM score s
+        LEFT JOIN embedding e ON s.item_id = e.item_id
+    """)
+    rows = cur.fetchall()
+    cur.close()
+    
+    # Convert DictRow objects to regular dicts to allow adding new keys.
+    processed_rows = []
+    for row in rows:
+        row_dict = dict(row)
+        if row_dict.get('embedding'):
+            # Use np.frombuffer to convert the binary data back to a numpy array
+            row_dict['embedding_vector'] = np.frombuffer(row_dict['embedding'], dtype=np.float32)
+        else:
+            row_dict['embedding_vector'] = np.array([]) # Use a consistent name
+        processed_rows.append(row_dict)
+        
+    return processed_rows
+
+def get_tracks_by_ids(item_ids_list):
+    """Fetches full track data (including embeddings) for a specific list of item_ids."""
+    if not item_ids_list:
+        return []
+    conn = get_db() # This now calls the function within this file
+    cur = conn.cursor(cursor_factory=DictCursor)
+    
+    # Convert item_ids to strings to match the text type in database
+    item_ids_str = [str(item_id) for item_id in item_ids_list]
+    
+    query = """
+        SELECT s.item_id, s.title, s.author, s.tempo, s.key, s.scale, s.mood_vector, s.energy, s.other_features, e.embedding
+        FROM score s
+        LEFT JOIN embedding e ON s.item_id = e.item_id
+        WHERE s.item_id IN %s
+    """
+    cur.execute(query, (tuple(item_ids_str),))
+    rows = cur.fetchall()
+    cur.close()
+
+    # Convert DictRow objects to regular dicts to allow adding new keys.
+    processed_rows = []
+    for row in rows:
+        row_dict = dict(row)
+        if row_dict.get('embedding'):
+            row_dict['embedding_vector'] = np.frombuffer(row_dict['embedding'], dtype=np.float32)
+        else:
+            row_dict['embedding_vector'] = np.array([])
+        processed_rows.append(row_dict)
+    
+    return processed_rows
+
+def get_score_data_by_ids(item_ids_list):
+    """Fetches only score-related data (excluding embeddings) for a specific list of item_ids."""
+    if not item_ids_list:
+        return []
+    conn = get_db() # This now calls the function within this file
+    cur = conn.cursor(cursor_factory=DictCursor)
+    query = """
+        SELECT s.item_id, s.title, s.author, s.tempo, s.key, s.scale, s.mood_vector, s.energy, s.other_features
+        FROM score s
+        WHERE s.item_id IN %s
+    """
+    try:
+        cur.execute(query, (tuple(item_ids_list),))
+        rows = cur.fetchall()
+    except Exception as e:
+        logger.error(f"Error fetching score data by IDs: {e}")
+        rows = [] # Return empty list on error
+    finally:
+        cur.close()
+    return [dict(row) for row in rows]
+
+
+def update_playlist_table(playlists): # Removed db_path
+    conn = get_db() # This now calls the function within this file
+    cur = conn.cursor()
+    try:
+        # Clear all previous conceptual playlists to reflect only the current run.
+        cur.execute("DELETE FROM playlist")
+        for name, cluster in playlists.items():
+            for item_id, title, author in cluster:
+                cur.execute("INSERT INTO playlist (playlist_name, item_id, title, author) VALUES (%s, %s, %s, %s) ON CONFLICT (playlist_name, item_id) DO NOTHING", (name, item_id, title, author))
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        logger.error("Error updating playlist table: %s", e)
+    finally:
+        cur.close()
+
+def cancel_job_and_children_recursive(job_id, task_type_from_db=None, reason="Task cancellation processed by API."):
+    """Helper to cancel a job and its children based on DB records."""
+    cancelled_count = 0
+
+    # First, determine the task_type for the current job_id
+    db_task_info = get_task_info_from_db(job_id)
+    current_task_type = db_task_info.get('task_type') if db_task_info else task_type_from_db
+
+    if not current_task_type:
+        logger.warning(f"Could not determine task_type for job {job_id}. Cannot reliably mark as REVOKED in DB or cancel children.")
+        try:
+            Job.fetch(job_id, connection=redis_conn)
+            send_stop_job_command(redis_conn, job_id)
+            cancelled_count += 1
+            logger.info(f"Job {job_id} (task_type unknown) stop command sent to RQ.")
+        except NoSuchJobError:
+            pass
+        return cancelled_count
+
+    # Mark as REVOKED in DB for the current job. This is the primary action.
+    save_task_status(job_id, current_task_type, TASK_STATUS_REVOKED, progress=100, details={"message": reason})
+
+    # Attempt to stop the job in RQ. This is a secondary action to interrupt a running process.
+    action_taken_in_rq = False
+    try:
+        job_rq = Job.fetch(job_id, connection=redis_conn)
+        current_rq_status = job_rq.get_status()
+        logger.info(f"Job {job_id} (type: {current_task_type}) found in RQ with status: {current_rq_status}")
+
+        if not job_rq.is_finished and not job_rq.is_failed and not job_rq.is_canceled:
+            if job_rq.is_started:
+                send_stop_job_command(redis_conn, job_id)
+            else:
+                job_rq.cancel()
+            action_taken_in_rq = True
+            logger.info(f"  Sent stop/cancel command for job {job_id} in RQ.")
+        else:
+            logger.info(f"  Job {job_id} is already in a terminal RQ state: {current_rq_status}.")
+
+    except NoSuchJobError:
+        logger.warning(f"Job {job_id} (type: {current_task_type}) not found in RQ, but marked as REVOKED in DB.")
+    except Exception as e_rq_interaction:
+        logger.error(f"Error interacting with RQ for job {job_id}: {e_rq_interaction}")
+
+    if action_taken_in_rq:
+        cancelled_count += 1
+
+    # Recursively cancel children found in the database
+    children_tasks = get_child_tasks_from_db(job_id)
+    
+    for child_task in children_tasks:
+        child_job_id = child_task['task_id']
+        # We only need to proceed if the child is not already in a terminal state
+        child_db_info = get_task_info_from_db(child_job_id)
+        if child_db_info and child_db_info.get('status') not in [TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED]:
+             logger.info(f"Recursively cancelling child job: {child_job_id}")
+             cancelled_count += cancel_job_and_children_recursive(child_job_id, reason="Cancelled due to parent task revocation.")
+        
+    return cancelled_count

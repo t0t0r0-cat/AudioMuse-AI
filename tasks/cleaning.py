@@ -32,8 +32,8 @@ def identify_and_clean_orphaned_albums_task():
     Main RQ task to identify and automatically clean orphaned albums from the database.
     This combines identification and deletion into a single automated process.
     """
-    from app import (app, redis_conn, get_db, save_task_status, get_task_info_from_db,
-                     TASK_STATUS_STARTED, TASK_STATUS_PROGRESS, TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED)
+    from app import app
+    from app_helper import (redis_conn, get_db, save_task_status, get_task_info_from_db, TASK_STATUS_STARTED, TASK_STATUS_PROGRESS, TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED)
 
     current_job = get_current_job(redis_conn)
     current_task_id = current_job.id if current_job else str(uuid.uuid4())

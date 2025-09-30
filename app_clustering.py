@@ -29,7 +29,8 @@ clustering_bp = Blueprint('clustering_bp', __name__)
 
 def clustering_task_failure_handler(job, connection, type, value, tb):
     """A failure handler for the main clustering task, executed by the worker."""
-    from app import app, save_task_status, TASK_STATUS_FAILURE
+    from app import app
+    from app_helper import save_task_status, TASK_STATUS_FAILURE
     with app.app_context():
         task_id = job.get_id()
         
@@ -253,11 +254,10 @@ def start_clustering_endpoint():
                             type: string
     """
     # Local imports to prevent circular dependency at startup
-    from app import (
-        rq_queue_high,
+    from app_helper import rq_queue_high, get_db
+    from app_helper import (
         clean_up_previous_main_tasks,
         save_task_status,
-        get_db,
         TASK_STATUS_PENDING,
         TASK_STATUS_STARTED,
         TASK_STATUS_PROGRESS,

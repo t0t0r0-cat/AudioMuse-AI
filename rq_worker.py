@@ -18,7 +18,8 @@ from rq import Worker
 # and application context as your Flask app.
 try:
     # Import the specific queues we defined
-    from app import app, redis_conn, rq_queue_high, rq_queue_default
+    from app import app
+    from app_helper import redis_conn
     from config import APP_VERSION
 except ImportError as e:
     print(f"Error importing from app.py: {e}")

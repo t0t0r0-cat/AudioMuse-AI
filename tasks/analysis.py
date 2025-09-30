@@ -403,8 +403,9 @@ def analyze_track(file_path, mood_labels_list, model_paths):
 # --- RQ Task Definitions ---
 # MODIFIED: Removed jellyfin_url, jellyfin_user_id, jellyfin_token as they are no longer needed for the function calls.
 def analyze_album_task(album_id, album_name, top_n_moods, parent_task_id):
-    from app import (app, redis_conn, get_db, save_task_status, get_task_info_from_db,
-                     save_track_analysis_and_embedding, JobStatus,
+    from app import (app, JobStatus)
+    from app_helper import (redis_conn, get_db, save_task_status, get_task_info_from_db,
+                     save_track_analysis_and_embedding,
                      TASK_STATUS_STARTED, TASK_STATUS_PROGRESS, TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED)
     
     current_job = get_current_job(redis_conn)
@@ -523,8 +524,8 @@ def analyze_album_task(album_id, album_name, top_n_moods, parent_task_id):
 
 # MODIFIED: Removed jellyfin_url, jellyfin_user_id, jellyfin_token from signature.
 def run_analysis_task(num_recent_albums, top_n_moods):
-    from app import (app, redis_conn, get_db, save_task_status, get_task_info_from_db, rq_queue_default,
-                     TASK_STATUS_STARTED, TASK_STATUS_PROGRESS, TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED)
+    from app import app
+    from app_helper import (redis_conn, get_db, rq_queue_default, save_task_status, get_task_info_from_db, TASK_STATUS_STARTED, TASK_STATUS_PROGRESS, TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED)
 
     current_job = get_current_job(redis_conn)
     current_task_id = current_job.id if current_job else str(uuid.uuid4())    
@@ -673,4 +674,3 @@ def run_analysis_task(num_recent_albums, top_n_moods):
             logger.critical(f"FATAL ERROR: Analysis failed: {e}", exc_info=True)
             log_and_update_main(f"❌ Main analysis failed: {e}", current_progress, task_state=TASK_STATUS_FAILURE, error_message=str(e), traceback=traceback.format_exc())
             raise
-

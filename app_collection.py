@@ -21,7 +21,8 @@ def collection_page():
 
 def collection_task_failure_handler(job, connection, type, value, tb):
     """A failure handler for the main collection sync task, executed by the worker."""
-    from app import app, save_task_status, TASK_STATUS_FAILURE
+    from app import app
+    from app_helper import save_task_status, TASK_STATUS_FAILURE
     with app.app_context():
         task_id = job.get_id()
         error_details = {
@@ -50,7 +51,8 @@ def start_collection_sync():
     This enqueues the main parent task for the synchronization using an auth token.
     """
     # Local import to avoid circular dependency
-    from app import save_task_status, TASK_STATUS_PENDING, rq_queue_high, clean_up_previous_main_tasks
+    from app_helper import rq_queue_high
+    from app_helper import save_task_status, TASK_STATUS_PENDING, clean_up_previous_main_tasks
 
     data = request.json
     # MODIFIED: Expect 'token' instead of 'email' and 'password'
@@ -97,7 +99,7 @@ def get_last_collection_task():
     """
     Get the status of the most recent collection sync task.
     """
-    from app import get_db # Local import to use the app context's db connection
+    from app_helper import get_db # Local import to use the app context's db connection
     db = get_db()
     cur = db.cursor(cursor_factory=DictCursor)
     cur.execute("""

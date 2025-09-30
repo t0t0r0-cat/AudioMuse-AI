@@ -43,7 +43,7 @@ def get_score_endpoint():
         description: Internal server error.
     """
     # Local import to prevent circular dependency
-    from app import get_db
+    from app_helper import get_db
 
     item_id = request.args.get('id')
     if not item_id:
@@ -91,7 +91,7 @@ def get_embedding_endpoint():
         description: Internal server error.
     """
     # Local import to prevent circular dependency
-    from app import get_db
+    from app_helper import get_db
 
     item_id = request.args.get('id')
     if not item_id:
@@ -163,4 +163,3 @@ def search_tracks_endpoint():
     except Exception as e:
         logger.error(f"Error during external track search: {e}", exc_info=True)
         return jsonify({"error": "An error occurred during search."}), 500
-
