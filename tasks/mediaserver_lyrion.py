@@ -100,27 +100,70 @@ def download_track(temp_dir, item):
 def get_recent_albums(limit):
     """Fetches recently added albums from Lyrion using JSON-RPC."""
     logger.info(f"Attempting to fetch {limit} most recent albums from Lyrion via JSON-RPC.")
-    
-    # Handle fetching all albums if limit is 0
-    if limit == 0:
-        params = [0, 999999, "sort:new"]
-    else:
-        params = [0, limit, "sort:new"]
-        
-    try:
-        response = _jsonrpc_request("albums", params)
-        logger.info(f"Lyrion API Raw Response: {response}")
-    except Exception as e:
-        logger.error(f"Lyrion API call for recent albums failed: {e}", exc_info=True)
-        return []
+    # Lyrion appears to cap results per page (commonly 100). Implement paging to accumulate all results
+    page_size = 100
+    albums_accum = []
 
-    if response and "albums_loop" in response:
-        albums = response["albums_loop"]
-        # Lyrion API response keys are different, so we map them to our standard format.
-        return [{'Id': a.get('id'), 'Name': a.get('album')} for a in albums]
-    
-    logger.warning("Lyrion API response did not contain the 'albums_loop' key or was empty.")
-    return []
+    # If limit == 0 we want all albums; represent that as None for easier logic
+    remaining = None if limit == 0 else int(limit)
+    offset = 0
+
+    while True:
+        # Calculate how many to request this page
+        req_count = page_size if (remaining is None or remaining > page_size) else remaining
+        params = [offset, req_count, "sort:new"]
+
+        try:
+            response = _jsonrpc_request("albums", params)
+            logger.debug(f"Lyrion API Raw Response (offset={offset}, count={req_count}): {response}")
+        except Exception as e:
+            logger.error(f"Lyrion API call for recent albums failed at offset={offset}: {e}", exc_info=True)
+            break
+
+        if not response:
+            logger.debug(f"No response for albums page offset={offset}. Stopping pagination.")
+            break
+
+        # Extract albums from possible response shapes
+        page_albums = []
+        if isinstance(response, dict) and "albums_loop" in response and isinstance(response["albums_loop"], list):
+            page_albums = response["albums_loop"]
+        elif isinstance(response, list):
+            page_albums = response
+        else:
+            # Try to find the first list in the response dict
+            if isinstance(response, dict):
+                for v in response.values():
+                    if isinstance(v, list):
+                        page_albums = v
+                        break
+
+        if not page_albums:
+            logger.debug(f"No albums found in page offset={offset}. Stopping pagination.")
+            break
+
+        # Map and append
+        mapped = [{'Id': a.get('id'), 'Name': a.get('album')} for a in page_albums]
+        albums_accum.extend(mapped)
+
+        # Update remaining and offset
+        if remaining is not None:
+            remaining -= len(page_albums)
+            if remaining <= 0:
+                break
+
+        # If the page returned fewer items than requested, we've reached the end
+        if len(page_albums) < req_count:
+            break
+
+        offset += len(page_albums)
+
+    if not albums_accum:
+        logger.warning("Lyrion API returned no recent albums after pagination.")
+    else:
+        logger.info(f"Collected {len(albums_accum)} albums from Lyrion.")
+
+    return albums_accum
 
 def get_all_songs():
     """Fetches all songs from Lyrion using JSON-RPC."""
@@ -280,7 +323,8 @@ def _create_playlist_batched(playlist_name, item_ids):
 
 def create_playlist(base_name, item_ids):
     """Creates a new playlist on Lyrion using admin credentials, with batching."""
-    _create_playlist_batched(base_name, item_ids)
+    # Return the result of the batched creation so callers can inspect the new playlist ID
+    return _create_playlist_batched(base_name, item_ids)
 
 def get_all_playlists():
     """Fetches all playlists from Lyrion using JSON-RPC."""
@@ -308,28 +352,79 @@ def get_tracks_from_album(album_id):
     # Lyrion's JSON-RPC doesn't have a direct "get tracks for album" call.
     # The 'titles' command with a filter is the correct way to get songs for an album.
     # We now fetch all songs and filter them by the album ID.
-    response = _jsonrpc_request("titles", [0, 999999, f"album_id:{album_id}"])
-    logger.info(f"Lyrion API Raw Track Response for Album {album_id}: {response}")
+    try:
+        response = _jsonrpc_request("titles", [0, 999999, f"album_id:{album_id}"])
+        logger.debug(f"Lyrion API Raw Track Response for Album {album_id}: {response}")
+    except Exception as e:
+        logger.error(f"Lyrion API call for album {album_id} failed: {e}", exc_info=True)
+        return []
 
-    if response and "titles_loop" in response:
-        songs = response["titles_loop"]
-        
-        # Filter out tracks that are from Spotify, as they cannot be downloaded directly.
-        local_songs = [s for s in songs if s.get('genre') != 'Spotify']
-        
-        if len(local_songs) < len(songs):
-            skipped_count = len(songs) - len(local_songs)
-            logger.info(f"Skipping {skipped_count} track(s) from album {album_id} because they are from Spotify.")
-        
-        # If all tracks were from Spotify, the album will be empty. Log this case.
-        if not local_songs and songs:
-            logger.info(f"Album {album_id} contains only Spotify tracks and will be skipped as no tracks can be downloaded.")
-            
-        # Map Lyrion API keys to our standard format.
-        return [{'Id': s.get('id'), 'Name': s.get('title'), 'AlbumArtist': s.get('artist'), 'Path': s.get('url'), 'url': s.get('url')} for s in local_songs]
-    
-    logger.warning(f"Lyrion API response for tracks of album {album_id} did not contain the 'titles_loop' key or was empty.")
-    return []
+    # Normalize response shapes: LMS/Lyrion may return a dict with 'titles_loop' or a raw list.
+    songs = []
+    if not response:
+        logger.warning(f"Lyrion API returned empty response for album {album_id}.")
+        return []
+
+    if isinstance(response, dict):
+        if "titles_loop" in response and isinstance(response["titles_loop"], list):
+            songs = response["titles_loop"]
+        else:
+            # Fallback: try to find the first list value in the response
+            for v in response.values():
+                if isinstance(v, list):
+                    songs = v
+                    break
+    elif isinstance(response, list):
+        songs = response
+
+    if not songs:
+        logger.warning(f"Lyrion API response for tracks of album {album_id} did not contain any song entries.")
+        return []
+
+    # Robust Spotify detection: check several possible fields and make it case-insensitive.
+    def is_spotify_track(item: dict) -> bool:
+        for key in ("genre", "service", "source"):
+            val = item.get(key)
+            if isinstance(val, str) and "spotify" in val.lower():
+                return True
+        # Also check the URL/path for spotify links
+        url = (item.get("url") or item.get("Path") or item.get("path") or "")
+        if isinstance(url, str) and "spotify" in url.lower():
+            return True
+        return False
+
+    local_songs = []
+    skipped_tracks = []
+    for s in songs:
+        if is_spotify_track(s):
+            skipped_tracks.append(s)
+        else:
+            local_songs.append(s)
+
+    if skipped_tracks:
+        skipped_count = len(skipped_tracks)
+        logger.info(f"Skipping {skipped_count} track(s) from album {album_id} because they appear to be from Spotify or are non-downloadable.")
+        # Log concise identifying information for each skipped track so operators can verify.
+        for st in skipped_tracks:
+            sk_id = st.get('id') or st.get('Id') or st.get('track_id')
+            sk_title = st.get('title') or st.get('name') or st.get('Name')
+            sk_artist = st.get('artist') or st.get('AlbumArtist') or st.get('albumArtist')
+            sk_url = st.get('url') or st.get('Path') or st.get('path')
+            logger.info(f"Skipped track - id: {sk_id!r}, title: {sk_title!r}, artist: {sk_artist!r}, url/path: {sk_url!r}")
+
+    if not local_songs and songs:
+        logger.info(f"Album {album_id} contains only Spotify or non-downloadable tracks and will be skipped.")
+
+    # Map Lyrion API keys to our standard format with safe fallbacks.
+    mapped = []
+    for s in local_songs:
+        id_val = s.get('id') or s.get('Id') or s.get('track_id')
+        title = s.get('title') or s.get('name') or s.get('Name')
+        artist = s.get('artist') or s.get('AlbumArtist') or s.get('albumArtist')
+        path = s.get('url') or s.get('Path') or s.get('path') or ''
+        mapped.append({'Id': id_val, 'Name': title, 'AlbumArtist': artist, 'Path': path, 'url': path})
+
+    return mapped
 
 def get_playlist_by_name(playlist_name):
     """Finds a Lyrion playlist by its exact name using JSON-RPC."""
