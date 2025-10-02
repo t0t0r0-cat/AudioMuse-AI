@@ -1,21 +1,19 @@
 import os
 import psycopg2
 from psycopg2.extras import DictCursor
-from flask import Flask, jsonify, request, render_template, g
-from contextlib import closing
+from flask import Flask, jsonify, request, render_template, g, current_app
 import json
 import logging
 import threading
-import numpy as np # Ensure numpy is imported
 import uuid # For generating job IDs if needed directly in API, though tasks handle their own
 import time
 
 # RQ imports
-from redis import Redis
-from rq import Queue, Retry
 from rq.job import Job, JobStatus
-from rq.exceptions import NoSuchJobError, InvalidJobOperation
-from rq.command import send_stop_job_command
+from rq.exceptions import NoSuchJobError
+
+# Redis client
+from redis import Redis
 
 # Werkzeug import for reverse proxy support
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -36,6 +34,21 @@ from config import JELLYFIN_URL, JELLYFIN_USER_ID, JELLYFIN_TOKEN, HEADERS, TEMP
     AI_MODEL_PROVIDER, OLLAMA_SERVER_URL, OLLAMA_MODEL_NAME, GEMINI_API_KEY, GEMINI_MODEL_NAME, MISTRAL_MODEL_NAME, \
     TOP_N_PLAYLISTS, PATH_DISTANCE_METRIC  # --- NEW: Import path distance metric ---
 
+# --- Flask App Setup ---
+app = Flask(__name__)
+
+# Import helper functions
+from app_helper import (
+    init_db, get_db, close_db,
+    redis_conn, rq_queue_high, rq_queue_default,
+    clean_up_previous_main_tasks,
+    save_task_status,
+    get_task_info_from_db,
+    cancel_job_and_children_recursive,
+    TASK_STATUS_PENDING, TASK_STATUS_STARTED, TASK_STATUS_PROGRESS,
+    TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED
+)
+
 # NOTE: Annoy Manager import is moved to be local where used to prevent circular imports.
 
 logger = logging.getLogger(__name__)
@@ -47,16 +60,6 @@ logging.basicConfig(
     datefmt='%d-%m-%Y %H-%M-%S' # Custom date/time format
 )
 
-JobStatus = JobStatus # Make JobStatus directly accessible within the app for tasks to import via `from app import JobStatus`
-
-# --- Flask App Setup ---
-app = Flask(__name__)
-
-# *** REVERSE PROXY FIX ***
-# Apply ProxyFix middleware to make the app aware of the reverse proxy.
-# This is crucial for path-based routing (e.g., domain.com/audiomuse).
-# It tells Flask to trust the X-Forwarded-Proto, X-Forwarded-Host,
-# X-Forwarded-For, and X-Forwarded-Prefix headers sent by proxies like Traefik or Nginx.
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 # *** END OF FIX ***
 
@@ -77,503 +80,15 @@ app.config['SWAGGER'] = {
 }
 swagger = Swagger(app)
 
-# --- RQ Setup ---
-REDIS_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
-redis_conn = Redis.from_url(
-    REDIS_URL,
-    socket_connect_timeout=15,  # seconds to wait for connection
-    socket_timeout=15           # seconds for read/write operations
-)
-rq_queue_high = Queue('high', connection=redis_conn) # High priority for main tasks
-rq_queue_default = Queue('default', connection=redis_conn) # Default queue for sub-tasks
-
-# --- Database Setup (PostgreSQL) ---
-# DATABASE_URL is now imported from config.py
-MAX_LOG_ENTRIES_STORED = 10 # Max number of recent log entries to store in the database per task
-
-# --- Status Constants ---
-TASK_STATUS_PENDING = "PENDING"
-TASK_STATUS_STARTED = "STARTED"
-TASK_STATUS_PROGRESS = "PROGRESS" # For more granular updates within a task
-TASK_STATUS_SUCCESS = "SUCCESS"
-TASK_STATUS_FAILURE = "FAILURE"
-TASK_STATUS_REVOKED = "REVOKED"
-# RQ JobStatus (JobStatus.FINISHED, JobStatus.FAILED etc.) are used for RQ's direct state
-
-def get_db():
-    if 'db' not in g:
-        try:
-            g.db = psycopg2.connect(
-                DATABASE_URL, 
-                connect_timeout=30,        # Time to establish connection (increased from 15)
-                keepalives_idle=600,       # Start keepalives after 10 min idle
-                keepalives_interval=30,    # Send keepalive every 30 sec
-                keepalives_count=3,        # 3 failed keepalives = dead connection
-                options='-c statement_timeout=300000'  # 5 min query timeout (300 seconds)
-            )
-        except psycopg2.OperationalError as e:
-            app.logger.error(f"Failed to connect to database: {e}") # Use app.logger for Flask context
-            raise # Re-raise to ensure the operation that needed the DB fails clearly
-    return g.db
-
 @app.teardown_appcontext
-def close_db(e=None):
-    db = g.pop('db', None)
-    if db is not None:
-        db.close()
-
-def init_db():
-    db = get_db()
-    cur = db.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS score (
-            item_id TEXT PRIMARY KEY,
-            title TEXT,
-            author TEXT,
-            tempo REAL,
-            key TEXT,
-            scale TEXT,
-            mood_vector TEXT
-        )
-    """)
-    # Check if the 'energy' column exists and add it if not
-    cur.execute("""
-        SELECT EXISTS (
-            SELECT 1
-            FROM information_schema.columns
-            WHERE table_name = 'score' AND column_name = 'energy'
-        )
-    """)
-    column_exists_energy = cur.fetchone()[0]
-    if not column_exists_energy:
-        app.logger.info("Adding 'energy' column to the 'score' table.")
-        cur.execute("ALTER TABLE score ADD COLUMN energy REAL")
-    # Check if the 'other_features' column exists and add it if not
-    cur.execute("""
-        SELECT EXISTS (
-            SELECT 1
-            FROM information_schema.columns
-            WHERE table_name = 'score' AND column_name = 'other_features'
-        )
-    """)
-    column_exists = cur.fetchone()[0]
-    if not column_exists:
-        app.logger.info("Adding 'other_features' column to the 'score' table.")
-        cur.execute("ALTER TABLE score ADD COLUMN other_features TEXT")
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS playlist (
-            id SERIAL PRIMARY KEY,
-            playlist_name TEXT,
-            item_id TEXT,
-            title TEXT,
-            author TEXT,
-            UNIQUE (playlist_name, item_id)
-        )
-    """)
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS task_status (
-            id SERIAL PRIMARY KEY,
-            task_id TEXT UNIQUE NOT NULL,
-            parent_task_id TEXT,
-            task_type TEXT NOT NULL,
-            sub_type_identifier TEXT,
-            status TEXT,
-            progress INTEGER DEFAULT 0,
-            details TEXT,
-            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    
-    # --- Migration for start_time and end_time to DOUBLE PRECISION for Unix timestamps ---
-    for col_name in ['start_time', 'end_time']:
-        cur.execute("""
-            SELECT data_type FROM information_schema.columns 
-            WHERE table_name = 'task_status' AND column_name = %s
-        """, (col_name,))
-        result = cur.fetchone()
-        
-        # If column doesn't exist, add it as DOUBLE PRECISION
-        if not result:
-            app.logger.info(f"Adding '{col_name}' column of type DOUBLE PRECISION to 'task_status' table.")
-            cur.execute(f"ALTER TABLE task_status ADD COLUMN {col_name} DOUBLE PRECISION")
-        # If column exists and is a timestamp type, migrate it
-        elif 'timestamp' in result[0]:
-            app.logger.warning(f"'{col_name}' column is of type {result[0]}. Migrating to DOUBLE PRECISION. Historical timing data in this column will be lost.")
-            cur.execute(f"ALTER TABLE task_status DROP COLUMN {col_name}")
-            cur.execute(f"ALTER TABLE task_status ADD COLUMN {col_name} DOUBLE PRECISION")
-
-    # Create the embedding table if it doesn't exist
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS embedding (
-            item_id TEXT PRIMARY KEY,
-            FOREIGN KEY (item_id) REFERENCES score (item_id) ON DELETE CASCADE
-        )
-    """)
-    # Check if the 'embedding' column exists in the 'embedding' table and add it if not
-    cur.execute("""
-        SELECT EXISTS (
-            SELECT 1
-            FROM information_schema.columns
-            WHERE table_name = 'embedding' AND column_name = 'embedding'
-        )
-    """)
-    column_exists_embedding = cur.fetchone()[0]
-    if not column_exists_embedding:
-        app.logger.info("Adding 'embedding' column of type BYTEA to the 'embedding' table.")
-        cur.execute("ALTER TABLE embedding ADD COLUMN embedding BYTEA")
-
-    # --- NEW: Table for Voyager index data ---
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS voyager_index_data (
-            index_name VARCHAR(255) PRIMARY KEY,
-            index_data BYTEA NOT NULL,
-            id_map_json TEXT NOT NULL,
-            embedding_dimension INTEGER NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-
-    # Drop obsolete tables if they exist
-    cur.execute("DROP TABLE IF EXISTS annoy_index;")
-    cur.execute("DROP TABLE IF EXISTS annoy_mappings;")
-
-    app.logger.info("Database tables checked/created successfully.")
-    db.commit()
-    cur.close()
+def teardown_db(e=None):
+    close_db(e)
 
 # Initialize the database schema when the application module is loaded.
 # This is safe because it doesn't import other application modules.
 with app.app_context():
     init_db()
 
-# --- DB Cleanup Utility ---
-def clean_up_previous_main_tasks():
-    """
-    Cleans up all previous main tasks before a new one starts.
-    - Archives tasks in SUCCESS state.
-    - Archives stale tasks stuck in PENDING, STARTED, or PROGRESS states.
-    A main task is identified by having a NULL parent_task_id.
-    """
-    db = get_db()
-    cur = db.cursor(cursor_factory=DictCursor)
-    app.logger.info("Starting cleanup of all previous main tasks.")
-    
-    non_terminal_statuses = (TASK_STATUS_PENDING, TASK_STATUS_STARTED, TASK_STATUS_PROGRESS, TASK_STATUS_SUCCESS)
-    
-    try:
-        cur.execute("SELECT task_id, status, details, task_type FROM task_status WHERE status IN %s AND parent_task_id IS NULL", (non_terminal_statuses,))
-        tasks_to_archive = cur.fetchall()
-
-        archived_count = 0
-        for task_row in tasks_to_archive:
-            task_id = task_row['task_id']
-            original_status = task_row['status']
-            
-            original_details_json = task_row['details']
-            original_status_message = f"Task was in '{original_status}' state."
-
-            if original_details_json:
-                try:
-                    original_details_dict = json.loads(original_details_json)
-                    original_status_message = original_details_dict.get("status_message", original_status_message)
-                except (json.JSONDecodeError, TypeError):
-                     app.logger.warning(f"Could not parse original details for task {task_id} during archival.")
-
-            if original_status == TASK_STATUS_SUCCESS:
-                archival_reason = "New main task started, old successful task archived."
-            else:
-                archival_reason = f"New main task started, stale task (status: {original_status}) has been archived."
-
-            archived_details = {
-                "log": [f"[Archived] {archival_reason}. Original summary: {original_status_message}"],
-                "original_status_before_archival": original_status,
-                "archival_reason": archival_reason
-            }
-            archived_details_json = json.dumps(archived_details)
-
-            with db.cursor() as update_cur:
-                update_cur.execute(
-                    "UPDATE task_status SET status = %s, details = %s, progress = 100, timestamp = NOW() WHERE task_id = %s AND status = %s",
-                    (TASK_STATUS_REVOKED, archived_details_json, task_id, original_status)
-                )
-            archived_count += 1
-
-        if archived_count > 0:
-            db.commit()
-            app.logger.info(f"Archived {archived_count} previous main tasks.")
-        else:
-            app.logger.info("No previous main tasks found to clean up.")
-    except Exception as e_main_clean:
-        db.rollback()
-        app.logger.error(f"Error during the main task cleanup process: {e_main_clean}")
-    finally:
-        cur.close()
-
-
-# --- DB Utility Functions (used by tasks.py and API) ---
-def save_task_status(task_id, task_type, status=TASK_STATUS_PENDING, parent_task_id=None, sub_type_identifier=None, progress=0, details=None):
-    """
-    Saves or updates a task's status in the database, using Unix timestamps for start and end times.
-    """
-    db = get_db()
-    cur = db.cursor()
-    current_unix_time = time.time()
-
-    if details is not None and isinstance(details, dict):
-        # Log truncation logic remains the same
-        if status != TASK_STATUS_SUCCESS and 'log' in details and isinstance(details['log'], list):
-            log_list = details['log']
-            if len(log_list) > MAX_LOG_ENTRIES_STORED:
-                original_log_length = len(log_list)
-                details['log'] = log_list[-MAX_LOG_ENTRIES_STORED:]
-                details['log_storage_info'] = f"Log in DB truncated to last {MAX_LOG_ENTRIES_STORED} entries. Original length: {original_log_length}."
-            else:
-                details.pop('log_storage_info', None)
-        elif status == TASK_STATUS_SUCCESS:
-            details.pop('log_storage_info', None)
-            if 'log' not in details or not isinstance(details.get('log'), list) or not details.get('log'):
-                details['log'] = ["Task completed successfully."]
-
-    details_json = json.dumps(details) if details is not None else None
-    
-    try:
-        # This query now handles start_time and end_time using Unix timestamps
-        cur.execute("""
-            INSERT INTO task_status (task_id, parent_task_id, task_type, sub_type_identifier, status, progress, details, timestamp, start_time, end_time)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), %s, CASE WHEN %s IN ('SUCCESS', 'FAILURE', 'REVOKED') THEN %s ELSE NULL END)
-            ON CONFLICT (task_id) DO UPDATE SET
-                status = EXCLUDED.status,
-                parent_task_id = EXCLUDED.parent_task_id,
-                sub_type_identifier = EXCLUDED.sub_type_identifier,
-                progress = EXCLUDED.progress,
-                details = EXCLUDED.details,
-                timestamp = NOW(),
-                start_time = COALESCE(task_status.start_time, %s),
-                end_time = CASE
-                                WHEN EXCLUDED.status IN ('SUCCESS', 'FAILURE', 'REVOKED') AND task_status.end_time IS NULL
-                                THEN %s
-                                ELSE task_status.end_time
-                           END
-        """, (task_id, parent_task_id, task_type, sub_type_identifier, status, progress, details_json, current_unix_time, status, current_unix_time, current_unix_time, current_unix_time))
-        db.commit()
-    except psycopg2.Error as e:
-        app.logger.error(f"DB Error saving task status for {task_id}: {e}")
-        try:
-            db.rollback()
-            app.logger.info(f"DB transaction rolled back for task status update of {task_id}.")
-        except psycopg2.Error as rb_e:
-            app.logger.error(f"DB Error during rollback for task status {task_id}: {rb_e}")
-    finally:
-        cur.close()
-
-
-def get_task_info_from_db(task_id):
-    """Fetches task info from DB and calculates running time in Python."""
-    db = get_db()
-    cur = db.cursor(cursor_factory=DictCursor)
-    # Fetch raw columns including the Unix timestamps
-    cur.execute("""
-        SELECT 
-            task_id, parent_task_id, task_type, sub_type_identifier, status, progress, details, timestamp, start_time, end_time
-        FROM task_status 
-        WHERE task_id = %s
-    """, (task_id,))
-    row = cur.fetchone()
-    cur.close()
-    if not row:
-        return None
-    
-    row_dict = dict(row)
-    current_unix_time = time.time()
-    
-    start_time = row_dict.get('start_time')
-    end_time = row_dict.get('end_time')
-
-    # If start_time is null (old record or pre-start), duration is 0.
-    if start_time is None:
-        row_dict['running_time_seconds'] = 0.0
-    else:
-        # If end_time is null, task is running. Use current time.
-        effective_end_time = end_time if end_time is not None else current_unix_time
-        row_dict['running_time_seconds'] = max(0, effective_end_time - start_time)
-        
-    return row_dict
-
-def get_child_tasks_from_db(parent_task_id):
-    """Fetches all child tasks for a given parent_task_id from the database."""
-    conn = get_db()
-    cur = conn.cursor(cursor_factory=DictCursor)
-    # MODIFIED: Select the 'details' column as well for the final check.
-    cur.execute("SELECT task_id, status, sub_type_identifier, details FROM task_status WHERE parent_task_id = %s", (parent_task_id,))
-    tasks = cur.fetchall()
-    cur.close()
-    # DictCursor returns a list of dictionary-like objects, convert to plain dicts
-    return [dict(row) for row in tasks]
-
-def track_exists(item_id):
-    """
-    Checks if a track exists in the database AND has been analyzed for key features.
-    in both the 'score' and 'embedding' tables.
-    Returns True if:
-    1. The track exists in 'score' table and 'other_features', 'energy', 'mood_vector', and 'tempo' are populated.
-    2. The track exists in the 'embedding' table.
-    Returns False otherwise, indicating a re-analysis is needed.
-    """
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT s.item_id
-        FROM score s
-        JOIN embedding e ON s.item_id = e.item_id
-        WHERE s.item_id = %s
-          AND s.other_features IS NOT NULL AND s.other_features != ''
-          AND s.energy IS NOT NULL
-          AND s.mood_vector IS NOT NULL AND s.mood_vector != ''
-          AND s.tempo IS NOT NULL
-    """, (item_id,))
-    row = cur.fetchone()
-    cur.close()
-    return row is not None
-
-def save_track_analysis_and_embedding(item_id, title, author, tempo, key, scale, moods, embedding_vector, energy=None, other_features=None):
-    """Saves track analysis and embedding in a single transaction."""
-    # Sanitize string inputs to remove NUL characters
-    title = title.replace('\x00', '') if title else title
-    author = author.replace('\x00', '') if author else author
-    key = key.replace('\x00', '') if key else key
-    scale = scale.replace('\x00', '') if scale else scale
-    other_features = other_features.replace('\x00', '') if other_features else other_features
-
-    mood_str = ','.join(f"{k}:{v:.3f}" for k, v in moods.items())
-    
-    conn = get_db()
-    cur = conn.cursor()
-    try:
-        # Save analysis to score table
-        cur.execute("""
-            INSERT INTO score (item_id, title, author, tempo, key, scale, mood_vector, energy, other_features)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (item_id) DO UPDATE SET
-                title = EXCLUDED.title,
-                author = EXCLUDED.author,
-                tempo = EXCLUDED.tempo,
-                key = EXCLUDED.key,
-                scale = EXCLUDED.scale,
-                mood_vector = EXCLUDED.mood_vector,
-                energy = EXCLUDED.energy,
-                other_features = EXCLUDED.other_features
-        """, (item_id, title, author, tempo, key, scale, mood_str, energy, other_features))
-
-        # Save embedding
-        if isinstance(embedding_vector, np.ndarray) and embedding_vector.size > 0:
-            embedding_blob = embedding_vector.astype(np.float32).tobytes()
-            cur.execute("""
-                INSERT INTO embedding (item_id, embedding) VALUES (%s, %s)
-                ON CONFLICT (item_id) DO UPDATE SET embedding = EXCLUDED.embedding
-            """, (item_id, psycopg2.Binary(embedding_blob)))
-
-        conn.commit()
-    except Exception as e:
-        conn.rollback()
-        logger.error("Error saving track analysis and embedding for %s: %s", item_id, e)
-        raise
-    finally:
-        cur.close()
-
-def get_all_tracks():
-    """Fetches all tracks and their embeddings from the database."""
-    conn = get_db()
-    cur = conn.cursor(cursor_factory=DictCursor)
-    cur.execute("""
-        SELECT s.item_id, s.title, s.author, s.tempo, s.key, s.scale, s.mood_vector, s.energy, s.other_features, e.embedding
-        FROM score s
-        LEFT JOIN embedding e ON s.item_id = e.item_id
-    """)
-    rows = cur.fetchall()
-    cur.close()
-    
-    # Convert DictRow objects to regular dicts to allow adding new keys.
-    processed_rows = []
-    for row in rows:
-        row_dict = dict(row)
-        if row_dict.get('embedding'):
-            # Use np.frombuffer to convert the binary data back to a numpy array
-            row_dict['embedding_vector'] = np.frombuffer(row_dict['embedding'], dtype=np.float32)
-        else:
-            row_dict['embedding_vector'] = np.array([]) # Use a consistent name
-        processed_rows.append(row_dict)
-        
-    return processed_rows
-
-def get_tracks_by_ids(item_ids_list):
-    """Fetches full track data (including embeddings) for a specific list of item_ids."""
-    if not item_ids_list:
-        return []
-    conn = get_db()
-    cur = conn.cursor(cursor_factory=DictCursor)
-    
-    # Convert item_ids to strings to match the text type in database
-    item_ids_str = [str(item_id) for item_id in item_ids_list]
-    
-    query = """
-        SELECT s.item_id, s.title, s.author, s.tempo, s.key, s.scale, s.mood_vector, s.energy, s.other_features, e.embedding
-        FROM score s
-        LEFT JOIN embedding e ON s.item_id = e.item_id
-        WHERE s.item_id IN %s
-    """
-    cur.execute(query, (tuple(item_ids_str),))
-    rows = cur.fetchall()
-    cur.close()
-
-    # Convert DictRow objects to regular dicts to allow adding new keys.
-    processed_rows = []
-    for row in rows:
-        row_dict = dict(row)
-        if row_dict.get('embedding'):
-            row_dict['embedding_vector'] = np.frombuffer(row_dict['embedding'], dtype=np.float32)
-        else:
-            row_dict['embedding_vector'] = np.array([])
-        processed_rows.append(row_dict)
-    
-    return processed_rows
-
-def get_score_data_by_ids(item_ids_list):
-    """Fetches only score-related data (excluding embeddings) for a specific list of item_ids."""
-    if not item_ids_list:
-        return []
-    conn = get_db()
-    cur = conn.cursor(cursor_factory=DictCursor)
-    query = """
-        SELECT s.item_id, s.title, s.author, s.tempo, s.key, s.scale, s.mood_vector, s.energy, s.other_features
-        FROM score s
-        WHERE s.item_id IN %s
-    """
-    try:
-        cur.execute(query, (tuple(item_ids_list),))
-        rows = cur.fetchall()
-    except Exception as e:
-        app.logger.error(f"Error fetching score data by IDs: {e}")
-        rows = [] # Return empty list on error
-    finally:
-        cur.close()
-    return [dict(row) for row in rows]
-
-
-def update_playlist_table(playlists): # Removed db_path
-    conn = get_db()
-    cur = conn.cursor()
-    try:
-        # Clear all previous conceptual playlists to reflect only the current run.
-        cur.execute("DELETE FROM playlist")
-        for name, cluster in playlists.items():
-            for item_id, title, author in cluster:
-                cur.execute("INSERT INTO playlist (playlist_name, item_id, title, author) VALUES (%s, %s, %s, %s) ON CONFLICT (playlist_name, item_id) DO NOTHING", (name, item_id, title, author))
-        conn.commit()
-    except Exception as e:
-        conn.rollback()
-        logger.error("Error updating playlist table: %s", e)
-    finally:
-        cur.close()
 
 # --- API Endpoints ---
 
@@ -720,66 +235,6 @@ def get_task_status_endpoint(task_id):
     response.pop('end_time', None)
 
     return jsonify(response)
-
-def cancel_job_and_children_recursive(job_id, task_type_from_db=None, reason="Task cancellation processed by API."):
-    """Helper to cancel a job and its children based on DB records."""
-    cancelled_count = 0
-
-    # First, determine the task_type for the current job_id
-    db_task_info = get_task_info_from_db(job_id)
-    current_task_type = db_task_info.get('task_type') if db_task_info else task_type_from_db
-
-    if not current_task_type:
-        logger.warning(f"Could not determine task_type for job {job_id}. Cannot reliably mark as REVOKED in DB or cancel children.")
-        try:
-            Job.fetch(job_id, connection=redis_conn)
-            send_stop_job_command(redis_conn, job_id)
-            cancelled_count += 1
-            logger.info(f"Job {job_id} (task_type unknown) stop command sent to RQ.")
-        except NoSuchJobError:
-            pass
-        return cancelled_count
-
-    # Mark as REVOKED in DB for the current job. This is the primary action.
-    save_task_status(job_id, current_task_type, TASK_STATUS_REVOKED, progress=100, details={"message": reason})
-
-    # Attempt to stop the job in RQ. This is a secondary action to interrupt a running process.
-    action_taken_in_rq = False
-    try:
-        job_rq = Job.fetch(job_id, connection=redis_conn)
-        current_rq_status = job_rq.get_status()
-        logger.info(f"Job {job_id} (type: {current_task_type}) found in RQ with status: {current_rq_status}")
-
-        if not job_rq.is_finished and not job_rq.is_failed and not job_rq.is_canceled:
-            if job_rq.is_started:
-                send_stop_job_command(redis_conn, job_id)
-            else:
-                job_rq.cancel()
-            action_taken_in_rq = True
-            logger.info(f"  Sent stop/cancel command for job {job_id} in RQ.")
-        else:
-            logger.info(f"  Job {job_id} is already in a terminal RQ state: {current_rq_status}.")
-
-    except NoSuchJobError:
-        logger.warning(f"Job {job_id} (type: {current_task_type}) not found in RQ, but marked as REVOKED in DB.")
-    except Exception as e_rq_interaction:
-        logger.error(f"Error interacting with RQ for job {job_id}: {e_rq_interaction}")
-
-    if action_taken_in_rq:
-        cancelled_count += 1
-
-    # Recursively cancel children found in the database
-    children_tasks = get_child_tasks_from_db(job_id)
-    
-    for child_task in children_tasks:
-        child_job_id = child_task['task_id']
-        # We only need to proceed if the child is not already in a terminal state
-        child_db_info = get_task_info_from_db(child_job_id)
-        if child_db_info and child_db_info.get('status') not in [TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED]:
-             logger.info(f"Recursively cancelling child job: {child_job_id}")
-             cancelled_count += cancel_job_and_children_recursive(child_job_id, reason="Cancelled due to parent task revocation.")
-        
-    return cancelled_count
 
 @app.route('/api/cancel/<task_id>', methods=['POST'])
 def cancel_task_endpoint(task_id):
@@ -1066,6 +521,9 @@ def listen_for_index_reloads():
 
 # --- Import and Register Blueprints ---
 # This is the original, working structure.
+from app_helper import get_child_tasks_from_db, get_score_data_by_ids, get_tracks_by_ids, save_track_analysis_and_embedding, track_exists, update_playlist_table
+
+
 from app_chat import chat_bp
 from app_clustering import clustering_bp
 from app_analysis import analysis_bp
@@ -1074,6 +532,7 @@ from app_sonic_fingerprint import sonic_fingerprint_bp
 from app_path import path_bp
 from app_collection import collection_bp
 from app_external import external_bp # --- NEW: Import the external blueprint ---
+from app_universe import universe_bp # --- NEW: Import the universe blueprint ---
 
 app.register_blueprint(chat_bp, url_prefix='/chat')
 app.register_blueprint(clustering_bp)
@@ -1083,6 +542,7 @@ app.register_blueprint(sonic_fingerprint_bp)
 app.register_blueprint(path_bp)
 app.register_blueprint(collection_bp)
 app.register_blueprint(external_bp, url_prefix='/external') # --- NEW: Register the external blueprint ---
+app.register_blueprint(universe_bp) # --- NEW: Register the universe blueprint ---
 
 if __name__ == '__main__':
     os.makedirs(TEMP_DIR, exist_ok=True)

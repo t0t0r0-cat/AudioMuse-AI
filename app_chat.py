@@ -335,8 +335,7 @@ def chat_playlist_api():
     if 'mistral_api_key' in data_for_log and data_for_log['mistral_api_key']:
         data_for_log['mistral_api_key'] = 'API-KEY' # Masked
     logger.debug("chat_playlist_api called. Raw request data: %s", data_for_log)
-
-    from app import get_db # Import get_db here, inside the function
+    from app_helper import get_db # Import get_db here, inside the function
     if not data or 'userInput' not in data:
         return jsonify({"error": "Missing userInput in request"}), 400
 

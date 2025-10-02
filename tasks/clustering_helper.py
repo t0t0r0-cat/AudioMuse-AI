@@ -101,8 +101,8 @@ def _perform_single_clustering_iteration(
 
 def _prepare_iteration_data(item_ids, active_mood_labels, use_embeddings, log_prefix, run_idx):
     """Fetches track data, creates feature/embedding vectors, and ensures alignment."""
-    # Local import to prevent circular dependency
-    from app import get_tracks_by_ids, get_score_data_by_ids
+    # Local imports to prevent circular dependency
+    from app_helper import get_tracks_by_ids, get_score_data_by_ids
 
     logger.info(f"{log_prefix} Iteration {run_idx}: Fetching data for {len(item_ids)} tracks. Use embeddings: {use_embeddings}")
     rows = get_tracks_by_ids(item_ids) if use_embeddings else get_score_data_by_ids(item_ids) # These functions are now imported locally
@@ -610,8 +610,9 @@ def _name_cluster(centroid_vector, pca_model, pca_enabled, mood_labels, scaler):
 
 def get_job_result_safely(job_id, parent_task_id, task_type="child task"):
     """Safely retrieves the result of an RQ job, checking both RQ and the database."""
-    # Local import to prevent circular dependency
-    from app import app, get_task_info_from_db, TASK_STATUS_SUCCESS, JobStatus, redis_conn
+    # Local imports to prevent circular dependency
+    from app import app, JobStatus
+    from app_helper import redis_conn, get_task_info_from_db, TASK_STATUS_SUCCESS
 
     try:
         job = Job.fetch(job_id, connection=redis_conn)

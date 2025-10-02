@@ -77,6 +77,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
       google-generativeai \
       mistralai \
       pydub \
+      python-mpd2 \
       "$(if [[ "$TARGETARCH" = "arm64" ]]; then \
         echo "tensorflow-aarch64==2.15.0"; \
       else \

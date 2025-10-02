@@ -1,6 +1,4 @@
 version: '3.8'
-# Remember to scale the worker to minimum 2
-# docker compose up -d --scale audiomuse-ai-worker=2
 services:
   # Redis service for RQ (task queue)
   redis:

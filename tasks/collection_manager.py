@@ -29,25 +29,21 @@ end
 
 def batch_task_failure_handler(job, connection, type, value, tb):
     """A failure handler for the album batch sync sub-task, executed by the worker."""
-    from app import app, save_task_status, TASK_STATUS_FAILURE
+    from app import app
+    from app_helper import save_task_status, TASK_STATUS_FAILURE
     
     with app.app_context():
         task_id = job.get_id()
         # Safely get args
         parent_id = job.args[0] if job.args and len(job.args) > 0 else None
         
-        # More robust traceback formatting to handle StackSummary from janitor
-        tb_formatted = ""
-        if isinstance(tb, traceback.StackSummary):
-            tb_formatted = "".join(tb.format())
-        else:
-            tb_formatted = "".join(traceback.format_exception(type, value, tb))
-
+        # The fix was already present here, but I'm confirming it's correct.
+        # This code correctly handles the StackSummary from the janitor.
         error_details = {
             "message": "Batch sync sub-task failed permanently after all retries.",
             "error_type": str(type.__name__),
             "error_value": str(value),
-            "traceback": tb_formatted
+            "traceback": "".join(tb.format()) if isinstance(tb, traceback.StackSummary) else "".join(traceback.format_exception(type, value, tb))
         }
         
         # Determine sub_type_identifier from job args if possible, for completeness
@@ -73,7 +69,8 @@ def sync_album_batch_task(parent_task_id, album_batch, pocketbase_url, pocketbas
     RQ subtask to synchronize a BATCH of albums with Pocketbase.
     This de-duplicates songs, fetches all records for the relevant artists, then processes locally.
     """
-    from app import (app, redis_conn, save_task_status, get_tracks_by_ids, save_track_analysis_and_embedding,
+    from app import app
+    from app_helper import (redis_conn, save_task_status, get_tracks_by_ids, save_track_analysis_and_embedding,
                      get_task_info_from_db, TASK_STATUS_STARTED, TASK_STATUS_PROGRESS,
                      TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED)
 
@@ -276,9 +273,9 @@ def sync_album_batch_task(parent_task_id, album_batch, pocketbase_url, pocketbas
 
 # --- Main task ---
 def sync_collections_task(url, token, num_albums):
-    from app import (app, redis_conn, save_task_status, get_task_info_from_db, rq_queue_default,
-                     get_child_tasks_from_db, get_db, TASK_STATUS_STARTED, TASK_STATUS_PROGRESS,
-                     TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED)
+    from app import app
+    from app_helper import (redis_conn, rq_queue_default, get_db, save_task_status, get_task_info_from_db, get_child_tasks_from_db,
+                     TASK_STATUS_STARTED, TASK_STATUS_PROGRESS, TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED)
 
     current_job = get_current_job()
     current_task_id = current_job.id if current_job else str(uuid.uuid4())
@@ -425,4 +422,3 @@ def sync_collections_task(url, token, num_albums):
             if not task_info or task_info.get('status') not in [TASK_STATUS_FAILURE, TASK_STATUS_REVOKED]:
                  log_and_update(f"Error: {e}", 100, status=TASK_STATUS_FAILURE, details={"error": str(e), "traceback": traceback.format_exc()})
             raise
-

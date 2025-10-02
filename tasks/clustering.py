@@ -24,7 +24,8 @@ from psycopg2.extras import DictCursor
 from config import (MAX_SONGS_PER_CLUSTER, MOOD_LABELS, STRATIFIED_GENRES,
                     MUTATION_KMEANS_COORD_FRACTION, MUTATION_INT_ABS_DELTA, MUTATION_FLOAT_ABS_DELTA,
                     TOP_N_ELITES, EXPLOITATION_START_FRACTION, EXPLOITATION_PROBABILITY_CONFIG,
-                    SAMPLING_PERCENTAGE_CHANGE_PER_RUN, ITERATIONS_PER_BATCH_JOB, MAX_CONCURRENT_BATCH_JOBS)
+                    SAMPLING_PERCENTAGE_CHANGE_PER_RUN, ITERATIONS_PER_BATCH_JOB, MAX_CONCURRENT_BATCH_JOBS,
+                    MIN_PLAYLIST_SIZE_FOR_TOP_N)
 
 # Import AI naming function and prompt template
 from ai import get_ai_playlist_name, creative_prompt_template
@@ -47,17 +48,25 @@ logger = logging.getLogger(__name__)
 
 def batch_task_failure_handler(job, connection, type, value, tb):
     """A failure handler for the clustering batch sub-task, executed by the worker."""
-    from app import app, save_task_status, TASK_STATUS_FAILURE
+    from app import app
+    from app_helper import save_task_status, TASK_STATUS_FAILURE
     with app.app_context():
         task_id = job.get_id()
         parent_id = job.kwargs.get('parent_task_id')
         batch_id_str = job.kwargs.get('batch_id_str')
         
+        # --- FIX: Handle different traceback types, especially from rq-janitor ---
+        tb_formatted = ""
+        if isinstance(tb, traceback.StackSummary):
+            tb_formatted = "".join(tb.format())
+        else:
+            tb_formatted = "".join(traceback.format_exception(type, value, tb))
+
         error_details = {
             "message": "Clustering batch sub-task failed permanently after all retries.",
             "error_type": str(type.__name__),
             "error_value": str(value),
-            "traceback": "".join(traceback.format_tb(tb))
+            "traceback": tb_formatted
         }
         
         save_task_status(
@@ -118,7 +127,8 @@ def run_clustering_batch_task(
     Executes a batch of clustering iterations. This task is enqueued by the main clustering task.
     """
     # --- Local imports to prevent circular dependency ---
-    from app import (app, redis_conn, save_task_status, get_task_info_from_db,
+    from app import app
+    from app_helper import (redis_conn, save_task_status, get_task_info_from_db,
                      TASK_STATUS_PROGRESS, TASK_STATUS_REVOKED, TASK_STATUS_FAILURE,
                      TASK_STATUS_SUCCESS)
 
@@ -257,11 +267,11 @@ def run_clustering_task(
     Orchestrates data preparation, batch job creation, result aggregation, and playlist creation.
     """
     # --- Local imports to prevent circular dependency ---
-    from app import (app, redis_conn, get_db, save_task_status, get_task_info_from_db,
-                     update_playlist_table,
+    from app import app
+    from app_helper import (redis_conn, get_db, save_task_status, get_task_info_from_db,
+                     update_playlist_table, get_child_tasks_from_db,
                      TASK_STATUS_PENDING, TASK_STATUS_STARTED, TASK_STATUS_PROGRESS,
-                     TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED,
-                     get_child_tasks_from_db)
+                     TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED)
 
     current_job = get_current_job(redis_conn)
     current_task_id = current_job.id if current_job else str(uuid.uuid4())
@@ -372,21 +382,25 @@ def run_clustering_task(
             if child_tasks_from_db:
                 logger.info(f"Found {len(child_tasks_from_db)} existing child tasks. Attempting state recovery.")
                 _monitor_and_process_batches(_main_task_accumulated_details, current_task_id, initial_check=True)
-                batches_completed_count = len([j for j in child_tasks_from_db if j['status'] in [TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE]])
-                next_batch_to_launch = batches_completed_count
-                logger.info(f"Recovery complete. Resuming. Batches completed: {batches_completed_count}, Next batch: {next_batch_to_launch}")
+                # Count batches processed during recovery (these are now in processed_job_ids)
+                batches_completed_count = len(_main_task_accumulated_details.get('processed_job_ids', set()))
+                
+                # Determine next batch to launch based on total runs accounted for
+                runs_accounted_for = _main_task_accumulated_details["runs_completed"]
+                next_batch_to_launch = runs_accounted_for // ITERATIONS_PER_BATCH_JOB
+                
+                logger.info(f"Recovery complete. Resuming. Runs accounted for: {runs_accounted_for}/{num_clustering_runs}. Next batch index to launch: {next_batch_to_launch}")
 
             if not _main_task_accumulated_details["last_subset_ids"]:
                 initial_subset_data = _get_stratified_song_subset(genre_map, target_songs_per_genre)
                 _main_task_accumulated_details["last_subset_ids"] = [t['item_id'] for t in initial_subset_data]
 
-            while batches_completed_count < num_total_batches:
+            while _main_task_accumulated_details["runs_completed"] < num_clustering_runs:
                 if current_job and (current_job.is_stopped or get_task_info_from_db(current_task_id).get('status') == TASK_STATUS_REVOKED):
                     _log_and_update("Task revoked, stopping.", _main_task_accumulated_details['runs_completed'], task_state=TASK_STATUS_REVOKED)
                     return {"status": "REVOKED", "message": "Main clustering task revoked."}
 
                 _monitor_and_process_batches(_main_task_accumulated_details, current_task_id)
-                batches_completed_count = len([j for j in get_child_tasks_from_db(current_task_id) if j['status'] in [TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE]])
 
                 while len(_main_task_accumulated_details["active_jobs"]) < MAX_CONCURRENT_BATCH_JOBS and next_batch_to_launch < num_total_batches:
                     _launch_batch_job(
@@ -410,14 +424,17 @@ def run_clustering_task(
                     progress
                 )
                 
-                # *** FIX 3: Starvation exit condition ***
-                # If all runs are accounted for and no jobs are active, exit the loop.
-                # This prevents getting stuck if a batch job fails to update its DB status.
+                # If all runs are accounted for (or runs_completed is now >= total_runs due to recovery/failure counting)
+                # AND no jobs are active, we can break the loop safely.
                 if _main_task_accumulated_details["runs_completed"] >= num_clustering_runs and len(_main_task_accumulated_details["active_jobs"]) == 0:
-                    _log_and_update(f"All runs ({_main_task_accumulated_details['runs_completed']}) are processed and no active batches remain. Forcing loop exit to prevent starvation.", progress)
+                    _log_and_update(f"All runs ({_main_task_accumulated_details['runs_completed']}) are processed or accounted for. Forcing loop exit to prevent starvation.", progress)
                     break
                 
                 time.sleep(3)
+            
+            # Ensure final state update accounts for any remaining jobs that finished right after the loop broke
+            _monitor_and_process_batches(_main_task_accumulated_details, current_task_id)
+
 
             _log_and_update("All batches completed. Finalizing...", 90)
 
@@ -514,52 +531,77 @@ def _calculate_target_songs_per_genre(genre_map, percentile, min_songs):
 def _monitor_and_process_batches(state_dict, parent_task_id, initial_check=False):
     """
     Checks status of active jobs, processes results of finished ones.
-    This function is corrected to prevent race conditions and infinite loops.
+    
+    This function has been critically updated to ensure it checks *all* unprocessed child tasks
+    from the database, regardless of their current database status. This prevents the main
+    task from getting stuck if a child job completes/fails and updates its status in the
+    database but is missed by the parent due to a race condition with RQ job cleanup.
     """
     # --- Local import to prevent circular dependency ---
-    from app import get_child_tasks_from_db, get_task_info_from_db, redis_conn, \
-                    TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED
+    from app_helper import (redis_conn, get_child_tasks_from_db, get_task_info_from_db,
+                    TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED, \
+                    TASK_STATUS_PENDING, TASK_STATUS_STARTED, TASK_STATUS_PROGRESS)
     
-    # ALWAYS get the full list of child tasks from the database.
-    # This is the single source of truth and prevents state inconsistencies.
+    # 1. Get all child tasks from the database.
     all_child_tasks = get_child_tasks_from_db(parent_task_id)
     
-    # Identify jobs that are still supposedly running according to our database.
-    job_ids_to_check = [
-        task['task_id'] for task in all_child_tasks 
-        if task['status'] not in [TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED]
-    ]
+    jobs_to_check_and_process = []
+    processed_jobs = state_dict.get("processed_job_ids", set())
 
-    # Also include jobs we know are active in-memory but might not be in the DB yet.
-    # This covers the brief moment right after enqueueing.
+    # 2. Identify all jobs that need a status check or result processing (i.e., not processed yet).
+    jobs_for_status_check = []
+    for task_info in all_child_tasks:
+        if task_info['task_id'] not in processed_jobs:
+            jobs_for_status_check.append(task_info)
+    
+    # Add jobs known to be active in memory but might not be in the DB yet (for safety right after launch).
     for job_id in state_dict["active_jobs"].keys():
-        if job_id not in job_ids_to_check:
-            job_ids_to_check.append(job_id)
+        if job_id not in processed_jobs and not any(t['task_id'] == job_id for t in jobs_for_status_check):
+            jobs_for_status_check.append({'task_id': job_id, 'status': TASK_STATUS_STARTED, 'sub_type_identifier': None, 'details': None}) # Mock DB info if not found
 
-    finished_job_ids = []
-    for job_id in job_ids_to_check:
+    jobs_ready_for_result_extraction = []
+
+    for task_info in jobs_for_status_check:
+        job_id = task_info['task_id']
+        db_status = task_info['status']
+        
+        is_terminal_in_db = db_status in [TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED]
+
+        if is_terminal_in_db:
+            # If DB is terminal, we must process the result now to count the runs.
+            jobs_ready_for_result_extraction.append(job_id)
+            continue
+            
+        # If DB status is non-terminal, check RQ status
         try:
             job = Job.fetch(job_id, connection=redis_conn)
             if job.is_finished or job.is_failed or job.get_status() == 'canceled':
-                finished_job_ids.append(job_id)
+                jobs_ready_for_result_extraction.append(job_id)
+            elif job_id not in state_dict["active_jobs"]:
+                 # If it's active in RQ but not in memory, add it to active_jobs.
+                 state_dict["active_jobs"][job_id] = job
         except NoSuchJobError:
-            # If the job is not in RQ, it's either finished and cleaned up, or something
-            # went wrong. We check our DB again. If the DB says it's not finished,
-            # we log a warning, but we treat it as 'finished' to avoid getting stuck.
-            task_info = get_task_info_from_db(job_id)
-            if not task_info or task_info.get('status') not in [TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED]:
-                 logger.warning(f"Job {job_id} not found in RQ, but its status in DB is not terminal. Treating as finished to prevent loop.")
-            finished_job_ids.append(job_id)
+            # Job not in RQ (cleared) and not marked terminal in DB. 
+            # This is the original stuck case. We assume it's done/cleared and process it.
+            logger.warning(f"Job {job_id} (status: {db_status}) not found in RQ (likely cleared). Treating as finished to prevent main task starvation.")
+            jobs_ready_for_result_extraction.append(job_id)
+        except Exception as e:
+            # Generic error during RQ fetch (e.g., connection issue). Assume terminal to prevent starvation.
+            logger.error(f"Error checking RQ status for job {job_id}: {e}. Assuming terminal state to prevent starvation.")
+            jobs_ready_for_result_extraction.append(job_id)
 
-    for job_id in finished_job_ids:
-        # *** FIX 2: Prevent re-processing results ***
-        if job_id in state_dict.get("processed_job_ids", set()):
-            if job_id in state_dict["active_jobs"]:
-                del state_dict["active_jobs"][job_id]
+
+    # 3. Process all identified finished/ready jobs
+    for job_id in jobs_ready_for_result_extraction:
+        # Re-check processed set (shouldn't happen here, but safe)
+        if job_id in processed_jobs:
             continue
-        
+            
+        # Try to get the result from RQ or DB.
         result = get_job_result_safely(job_id, parent_task_id, "clustering_batch")
-        if result:
+        
+        # If successful, process result and count runs
+        if result and result.get("status") == TASK_STATUS_SUCCESS:
             state_dict["runs_completed"] += result.get("iterations_completed_in_batch", 0)
             state_dict["last_subset_ids"] = result.get("final_subset_track_ids", state_dict["last_subset_ids"])
             best_from_batch = result.get("best_result_from_batch")
@@ -572,6 +614,28 @@ def _monitor_and_process_batches(state_dict, parent_task_id, initial_check=False
                 if current_best_score > state_dict["best_score"]:
                     state_dict["best_score"] = current_best_score
                     state_dict["best_result"] = best_from_batch
+        else:
+            # --- FIX: Account for runs from jobs that failed or were force-processed with no usable result ---
+            # This is critical for the starvation case where 4940/5000 is stuck.
+            task_info_for_runs = next((t for t in all_child_tasks if t['task_id'] == job_id), None)
+            
+            # We must rely on the sub_type_identifier stored in the database by the batch task.
+            if task_info_for_runs and task_info_for_runs.get('sub_type_identifier'):
+                if task_info_for_runs['sub_type_identifier'].startswith('Batch_'):
+                    try:
+                        batch_idx = int(task_info_for_runs['sub_type_identifier'].split('_')[-1])
+                        total_runs = state_dict['total_runs']
+                        
+                        start_run = batch_idx * ITERATIONS_PER_BATCH_JOB
+                        num_iterations = min(ITERATIONS_PER_BATCH_JOB, total_runs - start_run)
+                        
+                        if num_iterations > 0 and state_dict["runs_completed"] < total_runs:
+                             runs_to_add = min(num_iterations, total_runs - state_dict["runs_completed"])
+                             state_dict["runs_completed"] += runs_to_add
+                             logger.warning(f"Job {job_id} failed/missing result. Forced runs_completed count to increase by {runs_to_add} to prevent main task starvation.")
+                             
+                    except Exception:
+                        logger.error(f"Could not calculate runs for failed/missing job {job_id} using sub_type_identifier.")
         
         # Mark as processed and remove from active jobs list
         state_dict.setdefault("processed_job_ids", set()).add(job_id)
@@ -585,7 +649,7 @@ def _monitor_and_process_batches(state_dict, parent_task_id, initial_check=False
 
 def _launch_batch_job(state_dict, parent_task_id, batch_idx, total_runs, genre_map, target_per_genre, *args):
     """Constructs and enqueues a single batch job."""
-    from app import rq_queue_default # Local import to avoid circular dependency issues at top-level
+    from app_helper import rq_queue_default # Local import to avoid circular dependency issues at top-level
 
     # Unpack all the parameters passed via *args
     (
@@ -728,9 +792,21 @@ def _select_top_n_diverse_playlists(best_result, n):
 
     logger.info(f"Starting selection of Top {n} diverse playlists from {len(playlist_to_vector)} candidates.")
 
+    # --- NEW: Separate playlists by size ---
+    large_playlist_names = {name for name, songs in original_playlists.items() if len(songs) >= MIN_PLAYLIST_SIZE_FOR_TOP_N}
+    
+    # First, try to select from large playlists
+    large_playlist_vectors = {name: vec for name, vec in playlist_to_vector.items() if name in large_playlist_names}
+    
     # Convert to lists for easier indexing
-    available_names = list(playlist_to_vector.keys())
-    available_vectors = np.array(list(playlist_to_vector.values()))
+    if len(large_playlist_vectors) >= n:
+        logger.info(f"Found {len(large_playlist_vectors)} playlists with >= {MIN_PLAYLIST_SIZE_FOR_TOP_N} songs. Selecting from this pool.")
+        available_names = list(large_playlist_vectors.keys())
+        available_vectors = np.array(list(large_playlist_vectors.values()))
+    else:
+        logger.info(f"Only {len(large_playlist_vectors)} playlists have >= {MIN_PLAYLIST_SIZE_FOR_TOP_N} songs. Using all {len(playlist_to_vector)} playlists for selection.")
+        available_names = list(playlist_to_vector.keys())
+        available_vectors = np.array(list(playlist_to_vector.values()))
 
     if available_vectors.shape[0] <= n:
         return best_result

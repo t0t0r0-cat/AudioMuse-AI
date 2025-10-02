@@ -403,8 +403,9 @@ def analyze_track(file_path, mood_labels_list, model_paths):
 # --- RQ Task Definitions ---
 # MODIFIED: Removed jellyfin_url, jellyfin_user_id, jellyfin_token as they are no longer needed for the function calls.
 def analyze_album_task(album_id, album_name, top_n_moods, parent_task_id):
-    from app import (app, redis_conn, get_db, save_task_status, get_task_info_from_db,
-                     save_track_analysis_and_embedding, JobStatus,
+    from app import (app, JobStatus)
+    from app_helper import (redis_conn, get_db, save_task_status, get_task_info_from_db,
+                     save_track_analysis_and_embedding,
                      TASK_STATUS_STARTED, TASK_STATUS_PROGRESS, TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED)
     
     current_job = get_current_job(redis_conn)
@@ -523,8 +524,8 @@ def analyze_album_task(album_id, album_name, top_n_moods, parent_task_id):
 
 # MODIFIED: Removed jellyfin_url, jellyfin_user_id, jellyfin_token from signature.
 def run_analysis_task(num_recent_albums, top_n_moods):
-    from app import (app, redis_conn, get_db, save_task_status, get_task_info_from_db, rq_queue_default,
-                     TASK_STATUS_STARTED, TASK_STATUS_PROGRESS, TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED)
+    from app import app
+    from app_helper import (redis_conn, get_db, rq_queue_default, save_task_status, get_task_info_from_db, TASK_STATUS_STARTED, TASK_STATUS_PROGRESS, TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED)
 
     current_job = get_current_job(redis_conn)
     current_task_id = current_job.id if current_job else str(uuid.uuid4())    
@@ -603,6 +604,11 @@ def run_analysis_task(num_recent_albums, top_n_moods):
                         logger.warning(f"Redis timeout while fetching job {job_id}. Will retry on next loop.")
                         # We don't remove the job, we'll try fetching it again later.
                         continue
+                    except Exception as e:
+                        # Catch-all to avoid a single unexpected failure stopping the monitor loop.
+                        # Don't remove the job here because the fetch failed unexpectedly (network, auth, etc.).
+                        logger.warning(f"Unexpected error while fetching job {job_id}: {e}. Will retry on next loop.", exc_info=True)
+                        continue
                 
                 if albums_completed > last_rebuild_count and (albums_completed - last_rebuild_count) >= REBUILD_INDEX_BATCH_SIZE:
                     log_and_update_main(f"Batch of {albums_completed - last_rebuild_count} albums complete. Rebuilding index...", current_progress)
@@ -625,9 +631,27 @@ def run_analysis_task(num_recent_albums, top_n_moods):
                 
                 # MODIFIED: Call to get_tracks_from_album no longer needs server parameters.
                 tracks = get_tracks_from_album(album['Id'])
-                if not tracks or len(get_existing_track_ids([t['Id'] for t in tracks])) >= len(tracks):
+                # If no tracks returned, skip and log reason.
+                if not tracks:
                     albums_skipped += 1
                     checked_album_ids.add(album['Id'])
+                    logger.info(f"Skipping album '{album.get('Name')}' (ID: {album.get('Id')}) - no tracks returned by media server.")
+                    continue
+
+                # If all tracks already exist in DB, skip and log how many.
+                try:
+                    existing_count = len(get_existing_track_ids([t['Id'] for t in tracks]))
+                except Exception as e:
+                    # Defensive: if DB check fails, log and continue to next album to avoid blocking the main loop.
+                    logger.warning(f"Failed to verify existing tracks for album '{album.get('Name')}' (ID: {album.get('Id')}): {e}")
+                    checked_album_ids.add(album['Id'])
+                    albums_skipped += 1
+                    continue
+
+                if existing_count >= len(tracks):
+                    albums_skipped += 1
+                    checked_album_ids.add(album['Id'])
+                    logger.info(f"Skipping album '{album.get('Name')}' (ID: {album.get('Id')}) - all {existing_count}/{len(tracks)} tracks already analyzed.")
                     continue
                 
                 # MODIFIED: Enqueue call for analyze_album_task now passes fewer arguments.
@@ -647,6 +671,10 @@ def run_analysis_task(num_recent_albums, top_n_moods):
                     checked_album_ids=list(checked_album_ids)
                 )
                 
+            # If we never enqueued any album jobs for the batch, warn operator so they can investigate.
+            if albums_launched == 0 and albums_skipped == total_albums_to_check:
+                logger.warning(f"No albums were enqueued: all {total_albums_to_check} albums were skipped (no tracks or already analyzed). If unexpected, try running with num_recent_albums=0 to fetch more or inspect the media server responses and Spotify filtering.")
+
             while active_jobs:
                 monitor_and_clear_jobs()
                 progress = 5 + int(85 * ((albums_skipped + albums_completed) / float(total_albums_to_check)))
@@ -673,4 +701,3 @@ def run_analysis_task(num_recent_albums, top_n_moods):
             logger.critical(f"FATAL ERROR: Analysis failed: {e}", exc_info=True)
             log_and_update_main(f"❌ Main analysis failed: {e}", current_progress, task_state=TASK_STATUS_FAILURE, error_message=str(e), traceback=traceback.format_exc())
             raise
-

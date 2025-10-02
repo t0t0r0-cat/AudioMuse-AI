@@ -173,8 +173,8 @@ def load_voyager_index_for_querying(force_reload=False):
         logger.info("Voyager index is already loaded in memory. Skipping reload.")
         return
 
-    from app import get_db
-
+    from app_helper import get_db
+    
     logger.info("Attempting to load Voyager index from database into memory...")
     conn = get_db()
     cur = conn.cursor()
@@ -353,7 +353,7 @@ def find_nearest_neighbors_by_id(target_item_id: str, n: int = 10, eliminate_dup
     if voyager_index is None or id_map is None or reverse_id_map is None:
         raise RuntimeError("Voyager index is not loaded in memory. It may be missing, empty, or the server failed to load it on startup.")
 
-    from app import get_db, get_score_data_by_ids
+    from app_helper import get_db, get_score_data_by_ids
     db_conn = get_db()
 
     target_song_details_list = get_score_data_by_ids([target_item_id])
@@ -459,7 +459,7 @@ def find_nearest_neighbors_by_vector(query_vector: np.ndarray, n: int = 100, eli
     if voyager_index is None or id_map is None:
         raise RuntimeError("Voyager index is not loaded in memory.")
 
-    from app import get_db, get_score_data_by_ids
+    from app_helper import get_db, get_score_data_by_ids
     db_conn = get_db()
 
     if eliminate_duplicates:
@@ -540,7 +540,7 @@ def get_item_id_by_title_and_artist(title: str, artist: str):
     """
     Finds the item_id for an exact title and artist match.
     """
-    from app import get_db
+    from app_helper import get_db
     conn = get_db()
     cur = conn.cursor(cursor_factory=DictCursor)
     try:
@@ -560,7 +560,7 @@ def search_tracks_by_title_and_artist(title_query: str, artist_query: str, limit
     """
     Searches for tracks using partial title and artist names for autocomplete.
     """
-    from app import get_db
+    from app_helper import get_db
     conn = get_db()
     cur = conn.cursor(cursor_factory=DictCursor)
     results = []

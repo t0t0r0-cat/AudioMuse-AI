@@ -128,7 +128,7 @@ def generate_sonic_fingerprint_endpoint():
         description: Server error during generation.
     """
     # Local import to prevent circular dependency
-    from app import get_score_data_by_ids
+    from app_helper import get_score_data_by_ids
 
     try:
         if request.method == 'POST':
@@ -200,4 +200,3 @@ def generate_sonic_fingerprint_endpoint():
     except Exception as e:
         logger.error(f"Error in sonic_fingerprint endpoint: {e}", exc_info=True)
         return jsonify({"error": "An unexpected error occurred while generating the sonic fingerprint."}), 500
-

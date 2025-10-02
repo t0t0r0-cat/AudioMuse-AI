@@ -8,7 +8,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from rq import Worker
 
 try:
-    from app import redis_conn
+    from app_helper import redis_conn
     from config import APP_VERSION
 except ImportError as e:
     print(f"Error importing from app.py: {e}")
