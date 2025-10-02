@@ -779,4 +779,4 @@ def get_music_map_data_endpoint():
         logger.error(f"Error creating music map: {e}")
         import traceback
         logger.error(f"Traceback: {traceback.format_exc()}")
-        return jsonify({"error": f"Internal server error: {str(e)}"}), 500
+        return jsonify({"error": "An internal server error occurred."}), 500
