@@ -5,9 +5,17 @@ FROM ubuntu:22.04 AS models
 
 RUN mkdir -p /app/model
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    wget ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+RUN set -ux; \
+  n=0; \
+  until [ "$n" -ge 5 ]; do \
+    if apt-get update && apt-get install -y --no-install-recommends wget ca-certificates; then \
+      break; \
+    fi; \
+    n=$((n+1)); \
+    echo "apt-get attempt $n failed — retrying in $((n*n))s"; \
+    sleep $((n*n)); \
+  done; \
+  rm -rf /var/lib/apt/lists/*
 
 RUN wget -q -P /app/model \
     https://github.com/NeptuneHub/AudioMuse-AI/releases/download/v1.0.0-model/danceability-msd-musicnn-1.pb \
@@ -32,23 +40,32 @@ SHELL ["/bin/bash", "-c"]
 
 # Install system dependencies, including ffmpeg which is crucial for pydub
 # cuda-compiler is only for libdevice.10.bc, can be extracted into another stage
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 python3-pip python3-dev \
-    libfftw3-3 libyaml-0-2 libsamplerate0 \
-    libsndfile1 \
-    ffmpeg wget git vim \
-    redis-tools curl \
-    supervisor \
-    strace \
-    procps \
-    iputils-ping \
-    libopenblas-dev \
-    liblapack-dev \
-    libpq-dev \
-    gcc \
-    g++ \
-    "$(if [[ "$BASE_IMAGE" =~ ^nvidia/cuda:([0-9]+)\.([0-9]+).+$ ]]; then echo "cuda-compiler-${BASH_REMATCH[1]}-${BASH_REMATCH[2]}"; fi)" \
-    && rm -rf /var/lib/apt/lists/*
+RUN set -ux; \
+  n=0; \
+  until [ "$n" -ge 5 ]; do \
+    if apt-get update && apt-get install -y --no-install-recommends \
+      python3 python3-pip python3-dev \
+      libfftw3-3 libyaml-0-2 libsamplerate0 \
+      libsndfile1 \
+      ffmpeg wget git vim \
+      redis-tools curl \
+      supervisor \
+      strace \
+      procps \
+      iputils-ping \
+      libopenblas-dev \
+      liblapack-dev \
+      libpq-dev \
+      gcc \
+      g++ \
+      "$(if [[ "$BASE_IMAGE" =~ ^nvidia/cuda:([0-9]+)\.([0-9]+).+$ ]]; then echo "cuda-compiler-${BASH_REMATCH[1]}-${BASH_REMATCH[2]}"; fi)"; then \
+      break; \
+    fi; \
+    n=$((n+1)); \
+    echo "apt-get attempt $n failed — retrying in $((n*n))s"; \
+    sleep $((n*n)); \
+  done; \
+  rm -rf /var/lib/apt/lists/*
 
 #RUN test -f /usr/local/cuda-12.8/nvvm/libdevice/libdevice.10.bc
 
@@ -103,6 +120,7 @@ COPY deployment/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
 # Or it will take all available memory
 ENV TF_FORCE_GPU_ALLOW_GROWTH=true
+ENV TF_ENABLE_ONEDNN_OPTS=0
 ENV PYTHONPATH=/usr/local/lib/python3/dist-packages:/app
 
 EXPOSE 8000
