@@ -79,6 +79,9 @@ ARG BASE_IMAGE
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip3 install --prefix=/install \
     numpy==1.26.4 \
+      scipy==1.15.3 \
+      numba==0.60.0 \
+      soundfile==0.13.1 \
       Flask \
       Flask-Cors \
       redis \
