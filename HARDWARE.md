@@ -1,4 +1,4 @@
-# Supported HW and Configuration
+# Tested HW and Configuration
 
 This table collect all the HW and configuration from the different issue in this repository.
 
