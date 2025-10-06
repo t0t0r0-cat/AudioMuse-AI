@@ -75,8 +75,10 @@ ARG TARGETARCH
 ARG BASE_IMAGE
 
 # pydub is for audio conversion
+# Pin numpy to a stable version to avoid numeric differences between builds
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip3 install --prefix=/install \
+    numpy==1.26.4 \
       Flask \
       Flask-Cors \
       redis \
@@ -101,7 +103,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         #echo "tensorflow[$(if [[ "$BASE_IMAGE" =~ nvidia ]]; then echo "and-cuda"; fi)]==2.20.0"; \
         echo "tensorflow==2.20.0"; \
       fi)" \
-      librosa
+      librosa==0.11.0
 
 FROM base AS runner
 
@@ -121,6 +123,8 @@ COPY deployment/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 # Or it will take all available memory
 ENV TF_FORCE_GPU_ALLOW_GROWTH=true
 ENV TF_ENABLE_ONEDNN_OPTS=0
+# Use strict floating-point math in oneDNN to reduce non-deterministic FP optimizations
+ENV ONEDNN_DEFAULT_FPMATH_MODE=STRICT
 ENV PYTHONPATH=/usr/local/lib/python3/dist-packages:/app
 
 EXPOSE 8000

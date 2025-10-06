@@ -19,6 +19,35 @@ from tensorflow.core.framework import tensor_pb2
 from tensorflow.python.framework import tensor_util
 import tensorflow.keras.backend as K # Import Keras backend
 
+# Best-effort TF runtime tuning to reduce CPU-specific numeric drift.
+# We import the top-level tensorflow as tf_main so we can call newer APIs
+# without interfering with the compat.v1 alias used below.
+try:
+    import tensorflow as tf_main
+    try:
+        tf_main.keras.backend.set_floatx('float32')
+    except Exception:
+        pass
+
+    try:
+        tf_main.keras.mixed_precision.set_global_policy('float32')
+    except Exception:
+        try:
+            tf_main.keras.mixed_precision.experimental.set_policy('float32')
+        except Exception:
+            pass
+
+    try:
+        tf_main.config.experimental.enable_op_determinism()
+    except Exception:
+        try:
+            tf_main.experimental.enable_op_determinism()
+        except Exception:
+            logging.getLogger(__name__).info('op determinism API not available; continuing')
+except Exception:
+    # Best-effort only — do not raise during import
+    pass
+
 tf.disable_v2_behavior() # Necessary for loading frozen graphs
 
 from sklearn.metrics import silhouette_score, davies_bouldin_score, calinski_harabasz_score
