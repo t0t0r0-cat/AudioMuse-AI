@@ -216,6 +216,8 @@ Intel I7 CPU of first gen or older **DON'T WORK** because Tensorflow require AVX
 
 If you tested with CPU older than the suggested requirements, please track this in an issue ticket reporting your feedback.
 
+You can check the [Tested Hardware and Configuration](HARDWARE.md) notes to look which one was already tested till now.
+
 ### (Optional) Experimental Nvidia Support
 
 NVidia GPU support is available for the worker process. This can significantly speed up processing of tracks. 
