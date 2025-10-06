@@ -1,8 +1,12 @@
+This table collect all the HW configuration collected in the different issue from the users.
+
+**IMPORTANT:** If a CPU is not present in the table only means is not tested, but is still possible that works.
+
 | Issue ID | HW | CONFIGURATION | Supported | Notes |
 | :--- | :--- | :--- | :--- | :--- |
 | [#14](https://github.com/NeptuneHub/AudioMuse-AI/issues/14) | **CPU:** Ryzen 5600G | Docker Compose, Jellyfin | ✅ Yes | - |
 | [#24](https://github.com/NeptuneHub/AudioMuse-AI/issues/24) | **CPU:** Ryzen 5600G | TrueNAS SCALE, Docker Image v0.6.0-beta / v0.6.2-beta | ✅ Yes | - |
-| [#25](https://github.com/NeptuneHub/AudioMuse-AI/issues/25) | **CPU:** i5 6th gen, i5 8th gen | K3S cluster, Docker Image `:devel` | ✅ Yes | - |
+| [#25](https://github.com/NeptuneHub/AudioMuse-AI/issues/25) | **CPU:** i5 6th gen, i5 8th gen, ARM Raspberry PI 5 | K3S cluster, Docker Image `:devel` | ✅ Yes | - |
 | [#39](https://github.com/NeptuneHub/AudioMuse-AI/issues/39) | **CPU:** Ryzen 5 3600 | Bazzite (Fedora Atomic), Docker Image v0.6.4-beta | ✅ Yes | - |
 | [#55](https://github.com/NeptuneHub/AudioMuse-AI/issues/55) | **CPU:** Intel (32c), **GPU:** Nvidia RTX 3060 | Docker Swarm/single docker, Navidrome | ✅ Yes | Analysis failed for high-res FLACs. Developer added fallbacks, but the issue was ultimately a problem with Navidrome's media library indexing, fixed by the user running a full scan in Navidrome. |
 | [#62](https://github.com/NeptuneHub/AudioMuse-AI/issues/62) | **CPU:** Intel Xeon W-2125 | Proxmox-VE LXC (Debian), Docker Image v0.6.5-beta | ✅ Yes | - |
