@@ -1,6 +1,8 @@
-This table collect all the HW configuration collected in the different issue from the users.
+# Supported HW and Configuration
 
-**IMPORTANT:** If a CPU is not present in the table only means is not tested, but is still possible that works.
+This table collect all the HW and configuration from the different issue in this repository.
+
+**IMPORTANT:** If a CPU is not present in the table only means is not tested, but is still possible that works. If you have an issue on a particular CPU please raise a ticket.
 
 | Issue ID | HW | CONFIGURATION | Supported | Notes |
 | :--- | :--- | :--- | :--- | :--- |
