@@ -3,12 +3,14 @@ ARG BASE_IMAGE=ubuntu:22.04
 
 FROM ubuntu:22.04 AS models
 
+SHELL ["/bin/bash", "-lc"]
+
 RUN mkdir -p /app/model
 
 RUN set -ux; \
   n=0; \
   until [ "$n" -ge 5 ]; do \
-    if apt-get update && apt-get install -y --no-install-recommends wget ca-certificates; then \
+    if apt-get update && apt-get install -y --no-install-recommends wget ca-certificates curl; then \
       break; \
     fi; \
     n=$((n+1)); \
@@ -17,20 +19,39 @@ RUN set -ux; \
   done; \
   rm -rf /var/lib/apt/lists/*
 
-RUN wget -q -P /app/model \
-    https://github.com/NeptuneHub/AudioMuse-AI/releases/download/v1.0.0-model/danceability-msd-musicnn-1.pb \
-    https://github.com/NeptuneHub/AudioMuse-AI/releases/download/v1.0.0-model/mood_aggressive-audioset-vggish-1.pb \
-    https://github.com/NeptuneHub/AudioMuse-AI/releases/download/v1.0.0-model/mood_aggressive-msd-musicnn-1.pb \
-    https://github.com/NeptuneHub/AudioMuse-AI/releases/download/v1.0.0-model/mood_happy-audioset-vggish-1.pb \
-    https://github.com/NeptuneHub/AudioMuse-AI/releases/download/v1.0.0-model/mood_happy-msd-musicnn-1.pb \
-    https://github.com/NeptuneHub/AudioMuse-AI/releases/download/v1.0.0-model/mood_party-audioset-vggish-1.pb \
-    https://github.com/NeptuneHub/AudioMuse-AI/releases/download/v1.0.0-model/mood_party-msd-musicnn-1.pb \
-    https://github.com/NeptuneHub/AudioMuse-AI/releases/download/v1.0.0-model/mood_relaxed-audioset-vggish-1.pb \
-    https://github.com/NeptuneHub/AudioMuse-AI/releases/download/v1.0.0-model/mood_relaxed-msd-musicnn-1.pb \
-    https://github.com/NeptuneHub/AudioMuse-AI/releases/download/v1.0.0-model/mood_sad-audioset-vggish-1.pb \
-    https://github.com/NeptuneHub/AudioMuse-AI/releases/download/v1.0.0-model/mood_sad-msd-musicnn-1.pb \
-    https://github.com/NeptuneHub/AudioMuse-AI/releases/download/v1.0.0-model/msd-msd-musicnn-1.pb \
-    https://github.com/NeptuneHub/AudioMuse-AI/releases/download/v1.0.0-model/msd-musicnn-1.pb
+RUN set -eux; \
+  urls=( \
+    "https://github.com/NeptuneHub/AudioMuse-AI/releases/download/v2.0.0-model/danceability-msd-musicnn-1.onnx" \
+    "https://github.com/NeptuneHub/AudioMuse-AI/releases/download/v2.0.0-model/mood_aggressive-msd-musicnn-1.onnx" \
+    "https://github.com/NeptuneHub/AudioMuse-AI/releases/download/v2.0.0-model/mood_happy-msd-musicnn-1.onnx" \
+    "https://github.com/NeptuneHub/AudioMuse-AI/releases/download/v2.0.0-model/mood_party-msd-musicnn-1.onnx" \
+    "https://github.com/NeptuneHub/AudioMuse-AI/releases/download/v2.0.0-model/mood_relaxed-msd-musicnn-1.onnx" \
+    "https://github.com/NeptuneHub/AudioMuse-AI/releases/download/v2.0.0-model/mood_sad-msd-musicnn-1.onnx" \
+    "https://github.com/NeptuneHub/AudioMuse-AI/releases/download/v2.0.0-model/msd-msd-musicnn-1.onnx" \
+    "https://github.com/NeptuneHub/AudioMuse-AI/releases/download/v2.0.0-model/msd-musicnn-1.onnx" \
+  ); \
+  mkdir -p /app/model; \
+  for u in "${urls[@]}"; do \
+    n=0; \
+    fname="/app/model/$(basename "$u")"; \
+    # Diagnostic: print server response headers (helpful when downloads return 0 bytes)
+    wget --server-response --spider --timeout=15 --header="User-Agent: AudioMuse-Docker/1.0 (+https://github.com/NeptuneHub/AudioMuse-AI)" "$u" || true; \
+    until [ "$n" -ge 5 ]; do \
+      # Use wget with retries. --tries and --waitretry add backoff for transient failures.
+      if wget --no-verbose --tries=3 --retry-connrefused --waitretry=5 --header="User-Agent: AudioMuse-Docker/1.0 (+https://github.com/NeptuneHub/AudioMuse-AI)" -O "$fname" "$u"; then \
+        echo "Downloaded $u -> $fname"; \
+        break; \
+      fi; \
+      n=$((n+1)); \
+      echo "wget attempt $n for $u failed — retrying in $((n*n))s"; \
+      sleep $((n*n)); \
+    done; \
+    if [ "$n" -ge 5 ]; then \
+      echo "ERROR: failed to download $u after 5 attempts"; \
+      ls -lah /app/model || true; \
+      exit 1; \
+    fi; \
+  done
 
 FROM ${BASE_IMAGE} AS base
 
@@ -78,7 +99,7 @@ ARG BASE_IMAGE
 # Pin numpy to a stable version to avoid numeric differences between builds
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip3 install --prefix=/install \
-    numpy==1.26.4 \
+      numpy==1.26.4 \
       scipy==1.15.3 \
       numba==0.60.0 \
       soundfile==0.13.1 \
@@ -100,12 +121,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
       mistralai \
       pydub \
       python-mpd2 \
-      "$(if [[ "$TARGETARCH" = "arm64" ]]; then \
-        echo "tensorflow-aarch64==2.15.0"; \
-      else \
-        #echo "tensorflow[$(if [[ "$BASE_IMAGE" =~ nvidia ]]; then echo "and-cuda"; fi)]==2.20.0"; \
-        echo "tensorflow==2.20.0"; \
-      fi)" \
+      onnx==1.14.1 \
+      onnxruntime==1.15.1 \
       librosa==0.11.0
 
 FROM base AS runner
@@ -123,10 +140,8 @@ COPY . /app
 
 COPY deployment/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
-# Or it will take all available memory
-ENV TF_FORCE_GPU_ALLOW_GROWTH=true
-ENV TF_ENABLE_ONEDNN_OPTS=0
-# Use strict floating-point math in oneDNN to reduce non-deterministic FP optimizations
+# oneDNN floating-point math mode: STRICT reduces non-deterministic FP optimizations
+# Keep this if you want more deterministic CPU behavior when using oneDNN-enabled runtimes
 ENV ONEDNN_DEFAULT_FPMATH_MODE=STRICT
 ENV PYTHONPATH=/usr/local/lib/python3/dist-packages:/app
 
