@@ -66,16 +66,16 @@ RUN set -ux; \
   until [ "$n" -ge 5 ]; do \
     if apt-get update && apt-get install -y --no-install-recommends \
       python3 python3-pip python3-dev \
-      libfftw3-3 libyaml-0-2 libsamplerate0 \
-      libsndfile1 \
+      libfftw3-3=3.3.8-2ubuntu8 libyaml-0-2 libsamplerate0 \
+      libsndfile1=1.0.31-2ubuntu0.2 \
       ffmpeg wget git vim \
       redis-tools curl \
       supervisor \
       strace \
       procps \
       iputils-ping \
-      libopenblas-dev \
-      liblapack-dev \
+      libopenblas-dev=0.3.20+ds-1 \
+      liblapack-dev=3.10.0-2ubuntu1 \
       libpq-dev \
       gcc \
       g++ \
@@ -107,11 +107,11 @@ RUN --mount=type=cache,target=/root/.cache/pip \
       Flask-Cors \
       redis \
       requests \
-      scikit-learn \
+      scikit-learn==1.7.2 \
       rq \
       pyyaml \
       six \
-      voyager \
+      voyager==2.1.0 \
       rapidfuzz \
       psycopg2-binary \
       ftfy \
