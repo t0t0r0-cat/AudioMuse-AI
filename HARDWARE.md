@@ -1,7 +1,7 @@
 # Tested HW and Configuration WITH ONNX (from version 0.7.0-beta)
 | Issue ID | HW | CONFIGURATION | Supported | Notes |
 | :--- | :--- | :--- | :--- | :--- |
-| - | **CPU:** i5 6th gen, i5 8th gen, ARM | K3S cluster, Docker Image `:0.7.0-beta` | ✅ Yes | - |
+| - | **CPU:** Intel: i5 6th gen, i5 8th gen; ARM: VM on cloud (no detail on the specific cpu) | K3S cluster, Docker Image `:0.7.0-beta` | ✅ Yes | - |
 
 # Tested HW and Configuration WITH TENSORFLOW (till version 0.6.10-beta)
 
