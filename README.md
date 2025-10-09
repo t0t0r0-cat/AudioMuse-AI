@@ -9,7 +9,8 @@
   <img src="https://github.com/NeptuneHub/AudioMuse-AI/blob/main/screenshot/audiomuseai.png?raw=true" alt="AudioMuse-AI Logo" width="480">
 </p>
 
-AudioMuse-AI is an Open Source Dockerized environment that brings **automatic playlist generation** to your self-hosted music library. Using powerful tools like [Librosa](https://github.com/librosa/librosa) and [Tensorflow](https://www.tensorflow.org/), it performs **sonic analysis** on your audio files locally, allowing you to curate the perfect playlist for any mood or occasion without relying on external APIs. 
+
+AudioMuse-AI is an Open Source Dockerized environment that brings **automatic playlist generation** to your self-hosted music library. Using powerful tools like [Librosa](https://github.com/librosa/librosa) and **ONNX** (from version 0.7.0-beta, replacing TensorFlow), it performs **sonic analysis** on your audio files locally, allowing you to curate the perfect playlist for any mood or occasion without relying on external APIs.
 
 Deploy it easily on your local machine with Docker Compose/Podman or scale it up in your Kubernetes cluster, with the support of **AMD64** and **ARM64** architecture. It integrate with API the main Music server like [Jellyfin](https://jellyfin.org), [Navidrome](https://www.navidrome.org/), [LMS](https://github.com/epoupon/lms/tree/master), [Lyrion](https://lyrion.org/) and many mores will come in the future.
 
@@ -29,6 +30,7 @@ AudioMuse-AI lets you explore your music library in innovative ways, just **star
   > * [AudioMuse-AI MusicServer](https://github.com/NeptuneHub/AudioMuse-AI-MusicServer): **Experimental** Open Subosnic like Music Sever with integrated sonic functionality.
 
 And now just some **NEWS:**
+> * Version 0.7.0-beta remove Tensorflow and use instead ONXX. This new version should have better result on different CPU and be also more stable between update. **IMPORTANT:** this new version will require a new analysis of the entire library to work correctly.
 > * Version 0.6.9-beta introduce the support to Lyrion Music Server.
 
 ## Disclaimer
@@ -218,6 +220,8 @@ If you tested with CPU older than the suggested requirements, please track this 
 
 You can check the [Tested Hardware and Configuration](HARDWARE.md) notes to look which one was already tested till now.
 
+**IMPORTANT** From `0.7.0-beta` ONNX replace Tensorflow. So there is the possibility that CPU not supported till can now work.
+
 ### (Optional) Experimental Nvidia Support
 
 NVidia GPU support is available for the worker process. This can significantly speed up processing of tracks. 
@@ -377,7 +381,8 @@ AudioMuse AI is built upon a robust stack of open-source technologies:
 * [**Essentia-tensorflow**](https://essentia.upf.edu/) An open-source library for audio analysis, feature extraction, and music information retrieval. (used only until version v0.5.0-beta)
 * [**MusicNN Tensorflow Audio Models from Essentia**](https://essentia.upf.edu/models.html) Leverages pre-trained MusicNN models for feature extraction and prediction. More details and models.
 * [**Librosa**](https://github.com/librosa/librosa) Library for audio analysis, feature extraction, and music information retrieval. (used from version v0.6.0-beta)
-* [**Tensorflow**](https://www.tensorflow.org/) Platform developed by Google for building, training, and deploying machine learning and deep learning models.
+* [**ONNX**](https://onnx.ai/) Open Neural Network Exchange format and [ONNX Runtime](https://onnxruntime.ai/) for fast, portable, cross-platform model inference. **(Used from v0.7.0-beta, replaces TensorFlow)**
+* [**Tensorflow**](https://www.tensorflow.org/) Platform developed by Google for building, training, and deploying machine learning and deep learning models. **(Used only in versions before v0.7.0-beta)**
 * [**scikit-learn**](https://scikit-learn.org/) Utilized for machine learning algorithms:
 * [**voyager**](https://github.com/spotify/voyager) Approximate Nearest Neighbors used for the /similarity interface. Used from v0.6.3-beta
 * [**PostgreSQL:**](https://www.postgresql.org/) A powerful, open-source relational database used for persisting:  
