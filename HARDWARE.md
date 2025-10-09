@@ -1,4 +1,9 @@
-# Tested HW and Configuration
+# Tested HW and Configuration WITH ONNX (from version 0.7.0-beta)
+| Issue ID | HW | CONFIGURATION | Supported | Notes |
+| :--- | :--- | :--- | :--- | :--- |
+| - | **CPU:** i5 6th gen, i5 8th gen, ARM | K3S cluster, Docker Image `:0.7.0-beta` | ✅ Yes | - |
+
+# Tested HW and Configuration WITH TENSORFLOW (till version 0.6.10-beta)
 
 This table collect all the HW and configuration from the different issue in this repository.
 
