@@ -259,11 +259,14 @@ def create_media_server_playlist():
     if not final_track_ids:
         return jsonify({"error": "No valid track IDs were provided to create the playlist"}), 400
 
+    # Optional user credentials may be provided by the client (e.g., from the Sonic Fingerprint UI)
+    user_creds = data.get('user_creds') if isinstance(data, dict) else None
+
     try:
-        new_playlist_id = create_playlist_from_ids(playlist_name, final_track_ids)
-        
+        new_playlist_id = create_playlist_from_ids(playlist_name, final_track_ids, user_creds=user_creds)
+
         logger.info(f"Successfully created playlist '{playlist_name}' with ID {new_playlist_id}.")
-        
+
         return jsonify({
             "message": f"Playlist '{playlist_name}' created successfully!",
             "playlist_id": new_playlist_id

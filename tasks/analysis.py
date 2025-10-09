@@ -14,12 +14,8 @@ from pydub import AudioSegment
 from tempfile import NamedTemporaryFile
 
 import librosa
-import tensorflow.compat.v1 as tf
-from tensorflow.core.framework import tensor_pb2
-from tensorflow.python.framework import tensor_util
-import tensorflow.keras.backend as K # Import Keras backend
-
-tf.disable_v2_behavior() # Necessary for loading frozen graphs
+import onnx
+import onnxruntime as ort
 
 from sklearn.metrics import silhouette_score, davies_bouldin_score, calinski_harabasz_score
 from sklearn.preprocessing import StandardScaler
@@ -131,25 +127,61 @@ def clean_temp(temp_dir):
 
 # --- Core Analysis Functions ---
 
-def run_inference(session, feed_dict, output_tensor_name):
-    """
-    Runs inference using the provided session and tensor names.
-    Handles multiple input tensors via the feed_dict.
-    """
-    graph = session.graph
-    logger.debug(f"Running inference for output '{output_tensor_name}' with feed_dict keys: {list(feed_dict.keys())}")
-    
-    final_feed_dict = {}
-    for tensor_name, value in feed_dict.items():
-        try:
-            tensor = graph.get_tensor_by_name(tensor_name)
-            final_feed_dict[tensor] = value
-        except KeyError:
-            logger.error(f"Could not find tensor '{tensor_name}' in the current graph. Skipping.")
-            return None
+def _find_onnx_name(candidate_name, names):
+    """Try several heuristics to match a TF-style tensor name to an ONNX input/output name."""
+    if candidate_name in names:
+        return candidate_name
+    # strip trailing :0
+    stripped = candidate_name.split(':')[0]
+    if stripped in names:
+        return stripped
+    # try last part after '/'
+    last = stripped.split('/')[-1]
+    if last in names:
+        return last
+    # try replacing '/' with '_'
+    alt = stripped.replace('/', '_')
+    if alt in names:
+        return alt
+    # fallback: return first name
+    return names[0] if names else None
 
-    output_tensor = graph.get_tensor_by_name(output_tensor_name)
-    return session.run(output_tensor, feed_dict=final_feed_dict)
+def run_inference(onnx_session, feed_dict, output_tensor_name=None):
+    """Run inference on an ONNX Runtime session.
+
+    onnx_session: ort.InferenceSession
+    feed_dict: dict mapping possible tensor names to numpy arrays
+    output_tensor_name: optional expected output name (TF-style). If None, use first output.
+    """
+    # Build input name -> value map for ONNX
+    input_meta = onnx_session.get_inputs()
+    input_names = [i.name for i in input_meta]
+    mapped = {}
+    logger.debug(f"ONNX session inputs: {input_names}")
+    for key, val in feed_dict.items():
+        onnx_name = _find_onnx_name(key, input_names)
+        if onnx_name is None:
+            logger.error(f"Could not map input name '{key}' to any ONNX input names: {input_names}")
+            return None
+        mapped[onnx_name] = val
+
+    # Determine outputs
+    output_meta = onnx_session.get_outputs()
+    output_names = [o.name for o in output_meta]
+    logger.debug(f"ONNX session outputs: {output_names}")
+    if output_tensor_name:
+        onnx_output_name = _find_onnx_name(output_tensor_name, output_names)
+    else:
+        onnx_output_name = output_names[0] if output_names else None
+
+    if onnx_output_name is None:
+        logger.error("No ONNX output name available to run inference.")
+        return None
+
+    # Run and return numpy array
+    result = onnx_session.run([onnx_output_name], mapped)
+    # onnxruntime returns a list of outputs in the same order
+    return result[0] if isinstance(result, list) and len(result) > 0 else result
 
 def sigmoid(x):
     """Numerically stable sigmoid function."""
@@ -241,7 +273,12 @@ def analyze_track(file_path, mood_labels_list, model_paths):
     Analyzes a single track. This function is now completely self-contained to ensure
     that no TensorFlow state bleeds over between different track analyses.
     """
-    K.clear_session()
+    # Clear Keras session if available (no-op when using ONNX runtime)
+    try:
+        from tensorflow.keras import backend as K
+        K.clear_session()
+    except Exception:
+        pass
     logger.info(f"Starting analysis for: {os.path.basename(file_path)}")
 
     # --- 1. Load Audio and Compute Basic Features ---
@@ -307,46 +344,21 @@ def analyze_track(file_path, mood_labels_list, model_paths):
 
     # --- 3. Run Main Models (Embedding and Prediction) ---
     try:
-        # Load and run embedding model
-        embedding_graph = tf.Graph()
-        with embedding_graph.as_default():
-            graph_def = tf.GraphDef()
-            with tf.gfile.GFile(model_paths['embedding'], "rb") as f:
-                graph_def.ParseFromString(f.read())
-            tf.import_graph_def(graph_def, name="")
-        
-        with tf.Session(graph=embedding_graph) as sess:
-            # Use the corrected float32 patches
-            embedding_feed_dict = {DEFINED_TENSOR_NAMES['embedding']['input']: final_patches}
-            embeddings_per_patch = run_inference(sess, embedding_feed_dict, DEFINED_TENSOR_NAMES['embedding']['output'])
+        # Load and run embedding model (ONNX)
+        embedding_sess = ort.InferenceSession(model_paths['embedding'])
+        embedding_feed_dict = {DEFINED_TENSOR_NAMES['embedding']['input']: final_patches}
+        embeddings_per_patch = run_inference(embedding_sess, embedding_feed_dict, DEFINED_TENSOR_NAMES['embedding']['output'])
 
-        # Load and run prediction model
-        prediction_graph = tf.Graph()
-        with prediction_graph.as_default():
-            graph_def = tf.GraphDef()
-            with tf.gfile.GFile(model_paths['prediction'], "rb") as f:
-                graph_def.ParseFromString(f.read())
-            tf.import_graph_def(graph_def, name="")
+        # Load and run prediction model (ONNX)
+        prediction_sess = ort.InferenceSession(model_paths['prediction'])
+        prediction_feed_dict = {DEFINED_TENSOR_NAMES['prediction']['input']: embeddings_per_patch}
+        mood_logits = run_inference(prediction_sess, prediction_feed_dict, DEFINED_TENSOR_NAMES['prediction']['output'])
 
-        with tf.Session(graph=prediction_graph) as sess:
-            prediction_feed_dict = {
-                DEFINED_TENSOR_NAMES['prediction']['input']: embeddings_per_patch,
-                'saver_filename:0': ''
-            }
-            mood_predictions_raw = run_inference(sess, prediction_feed_dict, DEFINED_TENSOR_NAMES['prediction']['output'])
-            
-            if isinstance(mood_predictions_raw, bytes):
-                proto = tensor_pb2.TensorProto()
-                proto.ParseFromString(mood_predictions_raw)
-                mood_logits = tensor_util.MakeNdarray(proto)
-            else:
-                mood_logits = mood_predictions_raw
-            
-            averaged_logits = np.mean(mood_logits, axis=0)
-            # Apply sigmoid to convert raw model outputs (logits) into probabilities
-            final_mood_predictions = sigmoid(averaged_logits)
+        averaged_logits = np.mean(mood_logits, axis=0)
+        # Apply sigmoid to convert raw model outputs (logits) into probabilities
+        final_mood_predictions = sigmoid(averaged_logits)
 
-            moods = {label: float(score) for label, score in zip(mood_labels_list, final_mood_predictions)}
+        moods = {label: float(score) for label, score in zip(mood_labels_list, final_mood_predictions)}
 
     except Exception as e:
         logger.error(f"Main model inference failed for {os.path.basename(file_path)}: {e}", exc_info=True)
@@ -357,28 +369,15 @@ def analyze_track(file_path, mood_labels_list, model_paths):
 
     for key in ["danceable", "aggressive", "happy", "party", "relaxed", "sad"]:
         try:
-            other_model_graph = tf.Graph()
             model_path = model_paths[key]
-            
-            with other_model_graph.as_default():
-                graph_def = tf.GraphDef()
-                with tf.gfile.GFile(model_path, "rb") as f:
-                    graph_def.ParseFromString(f.read())
-                tf.import_graph_def(graph_def, name="")
-            
-            with tf.Session(graph=other_model_graph) as sess:
-                feed_dict = {DEFINED_TENSOR_NAMES[key]['input']: embeddings_per_patch}
-                
-                probabilities_raw = run_inference(sess, feed_dict, DEFINED_TENSOR_NAMES[key]['output'])
+            other_sess = ort.InferenceSession(model_path)
+            feed_dict = {DEFINED_TENSOR_NAMES[key]['input']: embeddings_per_patch}
+            probabilities_per_patch = run_inference(other_sess, feed_dict, DEFINED_TENSOR_NAMES[key]['output'])
 
-                if isinstance(probabilities_raw, bytes):
-                    proto = tensor_pb2.TensorProto()
-                    proto.ParseFromString(probabilities_raw)
-                    probabilities_per_patch = tensor_util.MakeNdarray(proto)
-                else:
-                    probabilities_per_patch = probabilities_raw
-                
-                if probabilities_per_patch.ndim == 2 and probabilities_per_patch.shape[1] == 2:
+            if probabilities_per_patch is None:
+                other_predictions[key] = 0.0
+            else:
+                if isinstance(probabilities_per_patch, np.ndarray) and probabilities_per_patch.ndim == 2 and probabilities_per_patch.shape[1] == 2:
                     # Using the CLASS_INDEX_MAP to select the correct probability
                     positive_class_index = CLASS_INDEX_MAP.get(key, 0)
                     class_probs = probabilities_per_patch[:, positive_class_index]
