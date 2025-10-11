@@ -21,8 +21,8 @@ AudioMuse-AI lets you explore your music library in innovative ways, just **star
 * **Instant Playlists**: Simply tell the AI what you want to hear—like "high-tempo, low-energy workout music"—and it will instantly generate a playlist for you.
 * **Sonic Fingerprint**: Generates playlists based on your listening habits, finding tracks similar to what you've been playing most often.
 
-For a **Demo of the Sonic Analysis potentiality** have a look at the [AudioMuse-AI-MusicServer Demo](https://github.com/NeptuneHub/AudioMuse-AI/issues/94) that will be avaiable for a limited amount of time.
- 
+> 👉 Experience the **Sonic Analysis potentiality** with the [AudioMuse-AI-MusicServer Demo](https://github.com/NeptuneHub/AudioMuse-AI/issues/94)!  
+> _Available for a limited time ⌛_
 
 **The full list or AudioMuse-AI related repository are:** 
   > * [AudioMuse-AI](https://github.com/NeptuneHub/AudioMuse-AI): the core application, it run Flask and Worker containers to actually run all the feature;
