@@ -278,3 +278,8 @@ SAMPLING_PERCENTAGE_CHANGE_PER_RUN = float(os.getenv("SAMPLING_PERCENTAGE_CHANGE
 DUPLICATE_DISTANCE_THRESHOLD_COSINE = float(os.getenv("DUPLICATE_DISTANCE_THRESHOLD_COSINE", "0.01"))
 DUPLICATE_DISTANCE_THRESHOLD_EUCLIDEAN = float(os.getenv("DUPLICATE_DISTANCE_THRESHOLD_EUCLIDEAN", "0.15"))
 DUPLICATE_DISTANCE_CHECK_LOOKBACK = int(os.getenv("DUPLICATE_DISTANCE_CHECK_LOOKBACK", "1"))
+
+# --- Mood Similarity Filtering ---
+# Threshold for mood similarity filtering. Lower values = stricter filtering (more similar moods required).
+# Range: 0.0 (identical moods only) to 1.0 (any mood difference allowed)
+MOOD_SIMILARITY_THRESHOLD = float(os.getenv("MOOD_SIMILARITY_THRESHOLD", "0.15"))

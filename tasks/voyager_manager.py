@@ -13,7 +13,7 @@ from config import (
     EMBEDDING_DIMENSION, INDEX_NAME, VOYAGER_METRIC, VOYAGER_EF_CONSTRUCTION,
     VOYAGER_M, VOYAGER_QUERY_EF, MAX_SONGS_PER_ARTIST,
     DUPLICATE_DISTANCE_THRESHOLD_COSINE, DUPLICATE_DISTANCE_THRESHOLD_EUCLIDEAN,
-    DUPLICATE_DISTANCE_CHECK_LOOKBACK
+    DUPLICATE_DISTANCE_CHECK_LOOKBACK, MOOD_SIMILARITY_THRESHOLD
 )
 
 # Import from other project modules
@@ -346,13 +346,17 @@ def _deduplicate_and_filter_neighbors(song_results: list, db_conn, original_song
 
     return unique_songs
 
-def _filter_by_mood_similarity(song_results: list, target_item_id: str, db_conn, mood_threshold: float = 0.15):
+def _filter_by_mood_similarity(song_results: list, target_item_id: str, db_conn, mood_threshold: float = None):
     """
     Filters songs by mood similarity using the other_features stored in the database.
     Keeps songs with similar mood features (danceability, aggressive, happy, party, relaxed, sad).
     """
     if not song_results:
         return []
+
+    # Use config value if no threshold provided
+    if mood_threshold is None:
+        mood_threshold = MOOD_SIMILARITY_THRESHOLD
 
     # Get target song mood features
     with db_conn.cursor(cursor_factory=DictCursor) as cur:
