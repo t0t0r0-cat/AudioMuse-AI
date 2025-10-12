@@ -346,9 +346,96 @@ def _deduplicate_and_filter_neighbors(song_results: list, db_conn, original_song
 
     return unique_songs
 
-def find_nearest_neighbors_by_id(target_item_id: str, n: int = 10, eliminate_duplicates: bool = False):
+def _filter_by_mood_similarity(song_results: list, target_item_id: str, db_conn, mood_threshold: float = 0.15):
+    """
+    Filters songs by mood similarity using the other_features stored in the database.
+    Keeps songs with similar mood features (danceability, aggressive, happy, party, relaxed, sad).
+    """
+    if not song_results:
+        return []
+
+    # Get target song mood features
+    with db_conn.cursor(cursor_factory=DictCursor) as cur:
+        cur.execute("SELECT other_features FROM score WHERE item_id = %s", (target_item_id,))
+        target_row = cur.fetchone()
+        if not target_row or not target_row['other_features']:
+            logger.warning(f"No mood features found for target song {target_item_id}. Skipping mood filtering.")
+            return song_results
+
+        target_mood_features = _parse_mood_features(target_row['other_features'])
+        if not target_mood_features:
+            logger.warning(f"Could not parse mood features for target song {target_item_id}. Skipping mood filtering.")
+            return song_results
+
+        logger.info(f"Target song {target_item_id} mood features: {target_mood_features}")
+
+        # Get mood features for all candidate songs
+        candidate_ids = [s['item_id'] for s in song_results]
+        cur.execute("SELECT item_id, other_features FROM score WHERE item_id = ANY(%s)", (candidate_ids,))
+        candidate_rows = cur.fetchall()
+
+        candidate_mood_features = {}
+        for row in candidate_rows:
+            if row['other_features']:
+                parsed_features = _parse_mood_features(row['other_features'])
+                if parsed_features:
+                    candidate_mood_features[row['item_id']] = parsed_features
+
+    # Filter by mood similarity
+    filtered_songs = []
+    mood_features = ['danceable', 'aggressive', 'happy', 'party', 'relaxed', 'sad']
+    
+    logger.info(f"Starting mood filtering with {len(song_results)} candidates, threshold: {mood_threshold}")
+    
+    for song in song_results:
+        candidate_features = candidate_mood_features.get(song['item_id'])
+        if not candidate_features:
+            logger.debug(f"Skipping song {song['item_id']}: no mood features found")
+            continue  # Skip songs without mood features
+
+        # Calculate mood distance (sum of absolute differences)
+        mood_distance = sum(
+            abs(target_mood_features.get(feature, 0.0) - candidate_features.get(feature, 0.0))
+            for feature in mood_features
+        )
+        
+        # Normalize by number of features
+        normalized_mood_distance = mood_distance / len(mood_features)
+        
+        logger.debug(f"Song {song['item_id']} mood distance: {normalized_mood_distance:.4f}, features: {candidate_features}")
+        
+        if normalized_mood_distance <= mood_threshold:
+            # Add mood distance info to the song result
+            song_with_mood = song.copy()
+            song_with_mood['mood_distance'] = normalized_mood_distance
+            filtered_songs.append(song_with_mood)
+            logger.debug(f"  -> KEPT (distance: {normalized_mood_distance:.4f})")
+        else:
+            logger.debug(f"  -> FILTERED OUT (distance: {normalized_mood_distance:.4f} > threshold: {mood_threshold})")
+
+    logger.info(f"Mood filtering results: kept {len(filtered_songs)} of {len(song_results)} songs (threshold: {mood_threshold})")
+    return filtered_songs
+
+def _parse_mood_features(other_features_str: str) -> dict:
+    """
+    Parses the other_features string to extract mood values.
+    Expected format: "danceable:0.123,aggressive:0.456,..."
+    """
+    try:
+        features = {}
+        for pair in other_features_str.split(','):
+            if ':' in pair:
+                key, value = pair.split(':', 1)
+                features[key.strip()] = float(value.strip())
+        return features
+    except Exception as e:
+        logger.warning(f"Error parsing mood features '{other_features_str}': {e}")
+        return {}
+
+def find_nearest_neighbors_by_id(target_item_id: str, n: int = 10, eliminate_duplicates: bool = False, mood_similarity: bool = False):
     """
     Finds the N nearest neighbors for a given item_id using the globally cached Voyager index.
+    If mood_similarity is True, filters results by mood feature similarity (danceability, aggressive, happy, party, relaxed, sad).
     """
     if voyager_index is None or id_map is None or reverse_id_map is None:
         raise RuntimeError("Voyager index is not loaded in memory. It may be missing, empty, or the server failed to load it on startup.")
@@ -374,7 +461,12 @@ def find_nearest_neighbors_by_id(target_item_id: str, n: int = 10, eliminate_dup
         logger.error(f"Could not retrieve vector for Voyager ID {target_voyager_id} (item_id: {target_item_id}): {e}")
         return []
 
-    if eliminate_duplicates:
+    # Increase search size if we need mood filtering
+    if mood_similarity:
+        base_multiplier = 8 if eliminate_duplicates else 4
+        k_increase = max(20, int(n * base_multiplier))
+        num_to_query = n + k_increase + 1
+    elif eliminate_duplicates:
         k_increase = max(5, int(n * 4))
         num_to_query = n + k_increase + 1
     else:
@@ -426,6 +518,13 @@ def find_nearest_neighbors_by_id(target_item_id: str, n: int = 10, eliminate_dup
     # --- END OF IMPLEMENTATION ---
 
     unique_results_by_song = _deduplicate_and_filter_neighbors(distance_filtered_results, db_conn, target_song_details)
+    
+    # Apply mood similarity filtering if requested
+    if mood_similarity:
+        logger.info(f"Mood similarity filtering requested for target_item_id: {target_item_id}")
+        unique_results_by_song = _filter_by_mood_similarity(unique_results_by_song, target_item_id, db_conn)
+    else:
+        logger.info(f"No mood similarity filtering requested (mood_similarity={mood_similarity})")
     
     if eliminate_duplicates:
         item_ids_to_check = [r['item_id'] for r in unique_results_by_song]
