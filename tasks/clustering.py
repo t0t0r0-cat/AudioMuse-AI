@@ -10,7 +10,7 @@ import random
 import logging
 import uuid
 import traceback
-from scipy.spatial.distance import cdist # *** NEW: For distance calculations ***
+# Regex and distance calculations now handled in clustering_postprocessing.py
 
 # RQ import
 from rq import get_current_job, Retry
@@ -36,6 +36,12 @@ from .clustering_helper import (
     _get_stratified_song_subset,
     get_job_result_safely,
     _perform_single_clustering_iteration
+)
+# Import post-processing functions from dedicated module
+from .clustering_postprocessing import (
+    apply_duplicate_filtering_to_clustering_result,
+    apply_minimum_size_filter_to_clustering_result,
+    select_top_n_diverse_playlists
 )
 
 # we want to maintain np.float_ for backwards compatibility but it was removed in numpy 2.0
@@ -444,11 +450,37 @@ def run_clustering_task(
 
             best_result = _main_task_accumulated_details["best_result"]
 
-            # *** NEW STEP: Filter for Top N Most Diverse Playlists ***
+            # --- POST-PROCESSING PIPELINE: Apply filtering steps after clustering is complete ---
+            
+            # Log initial state for debugging
+            initial_playlist_count = len(best_result.get("named_playlists", {}))
+            _log_and_update(f"Starting post-processing with {initial_playlist_count} playlists", 90.2)
+            
+            # *** STEP 1: Apply duplicate filtering to remove similar songs within playlists ***
+            # Uses the same distance-based filtering logic as voyager_manager to avoid duplicate tracks
+            _log_and_update("Applying duplicate filtering to remove similar songs...", 90.5)
+            _log_and_update(f"Before duplicate filtering: {len(best_result.get('named_playlists', {}))} playlists", 90.5)
+            best_result = apply_duplicate_filtering_to_clustering_result(best_result, log_prefix="[DuplicateFilter] ")
+            _log_and_update(f"After duplicate filtering: {len(best_result.get('named_playlists', {}))} playlists", 90.5)
+            
+            # *** STEP 2: Apply minimum size filter to remove small playlists ***
+            # Removes playlists with fewer than the configured minimum number of songs
+            # Use the configured minimum playlist size from config.py
+            min_size_threshold = MIN_PLAYLIST_SIZE_FOR_TOP_N
+            _log_and_update(f"Applying minimum size filter (>= {min_size_threshold} songs)...", 91)
+            _log_and_update(f"Before minimum size filtering: {len(best_result.get('named_playlists', {}))} playlists", 91)
+            best_result = apply_minimum_size_filter_to_clustering_result(best_result, min_size_threshold, log_prefix="[MinSizeFilter] ")
+            _log_and_update(f"After minimum size filtering: {len(best_result.get('named_playlists', {}))} playlists", 91)
+
+            # *** STEP 3: Filter for Top N Most Diverse Playlists (only if still needed) ***
+            # Selects the N most diverse playlists if there are more than requested
             if top_n_playlists_param > 0 and len(best_result.get("named_playlists", {})) > top_n_playlists_param:
-                _log_and_update(f"Filtering for Top {top_n_playlists_param} most diverse playlists...", 91)
-                best_result = _select_top_n_diverse_playlists(best_result, top_n_playlists_param)
+                _log_and_update(f"Filtering for Top {top_n_playlists_param} most diverse playlists...", 91.5)
+                best_result = select_top_n_diverse_playlists(best_result, top_n_playlists_param)
                 _main_task_accumulated_details["best_result"] = best_result # Update main dict with filtered result
+                
+            final_playlist_count = len(best_result.get("named_playlists", {}))
+            _log_and_update(f"Post-processing complete: {initial_playlist_count} -> {final_playlist_count} playlists", 91.8)
 
             _log_and_update(f"Best clustering found with score: {_main_task_accumulated_details['best_score']:.2f}. Creating playlists...", 92)
 
@@ -463,12 +495,53 @@ def run_clustering_task(
             _log_and_update("Deleting existing automatic playlists...", 97)
             delete_automatic_playlists()
 
-            _log_and_update(f"Creating {len(final_playlists_with_details)} new playlists...", 98)
-            for name, songs_with_details in final_playlists_with_details.items():
+            # *** ABSOLUTE FINAL SHUFFLE: Guarantee random order right before database storage ***
+            logger.info("=== ABSOLUTE FINAL SHUFFLE: Randomizing all playlists before database storage ===")
+            final_shuffled_playlists = {}
+            for playlist_name, songs_list in final_playlists_with_details.items():
+                if len(songs_list) > 1:
+                    # ULTIMATE FISHER-YATES SHUFFLE - Last chance to randomize before database
+                    shuffled_list = songs_list.copy()
+                    n = len(shuffled_list)
+                    # Triple-source randomization: system time + random + position-based seed
+                    ultra_seed = int(time.time() * 1000000) % 1000000
+                    
+                    # Apply Fisher-Yates with enhanced randomization
+                    for i in range(n - 1, 0, -1):
+                        # Multi-source random index generation
+                        base_random = random.randint(0, i)
+                        time_component = ultra_seed % (i + 1)
+                        position_component = (i * 13 + 7) % (i + 1)
+                        j = (base_random + time_component + position_component) % (i + 1)
+                        
+                        # Perform swap
+                        shuffled_list[i], shuffled_list[j] = shuffled_list[j], shuffled_list[i]
+                        ultra_seed = (ultra_seed * 1664525 + 1013904223) % (2**32)
+                    
+                    # Verify shuffle effectiveness
+                    original_first_5 = [song[1] for song in songs_list[:5]]
+                    shuffled_first_5 = [song[1] for song in shuffled_list[:5]]
+                    
+                    logger.info(f"ULTIMATE SHUFFLE '{playlist_name}': {len(shuffled_list)} songs")
+                    logger.info(f"  ORIGINAL: {original_first_5}")
+                    logger.info(f"  SHUFFLED: {shuffled_first_5}")
+                    
+                    # Emergency fallback if shuffle didn't work (shouldn't happen)
+                    if original_first_5 == shuffled_first_5:
+                        logger.warning(f"Emergency fallback: manually reversing '{playlist_name}'")
+                        shuffled_list = list(reversed(shuffled_list))
+                    
+                    final_shuffled_playlists[playlist_name] = shuffled_list
+                else:
+                    final_shuffled_playlists[playlist_name] = songs_list
+                    logger.info(f"ULTIMATE SHUFFLE '{playlist_name}': only {len(songs_list)} songs, no shuffle needed")
+
+            _log_and_update(f"Creating {len(final_shuffled_playlists)} new playlists...", 98)
+            for name, songs_with_details in final_shuffled_playlists.items():
                 item_ids = [item_id for item_id, _, _ in songs_with_details]
                 create_playlist(name, item_ids)
 
-            update_playlist_table(final_playlists_with_details)
+            update_playlist_table(final_shuffled_playlists)
 
             # --- Final Success Reporting ---
             final_message = "Clustering task completed successfully!"
@@ -767,113 +840,32 @@ def _name_and_prepare_playlists(best_result, ai_provider, ollama_url, ollama_mod
         base_name_with_suffix = f"{final_name}_automatic"
         
         # The 'songs' variable is already the list of tuples: [(item_id, title, author), ...]
-        if max_songs > 0 and len(songs) > max_songs:
-             chunks = [songs[i:i+max_songs] for i in range(0, len(songs), max_songs)]
+        # *** FINAL SAFETY SHUFFLE: Ensure songs are randomized in final playlists ***
+        final_songs = songs.copy()
+        n = len(final_songs)
+        
+        if n > 1:
+            # FISHER-YATES MANUAL SHUFFLE - GUARANTEED TO RANDOMIZE
+            current_time_seed = int(time.time() * 1000000) % 1000000
+            
+            for i in range(n - 1, 0, -1):
+                j = (random.randint(0, i) + current_time_seed + i * 7) % (i + 1)
+                final_songs[i], final_songs[j] = final_songs[j], final_songs[i]
+                current_time_seed = (current_time_seed * 1103515245 + 12345) % (2**31)
+            
+            logger.info(f"FINAL FISHER-YATES SHUFFLE applied to '{base_name_with_suffix}': {len(final_songs)} songs")
+            logger.info(f"FINAL ORDER: First song = '{final_songs[0][1]}', Last song = '{final_songs[-1][1]}'")
+        else:
+            logger.info(f"FINAL: '{base_name_with_suffix}' has only {n} songs - no shuffling needed")
+        
+        if max_songs > 0 and len(final_songs) > max_songs:
+             chunks = [final_songs[i:i+max_songs] for i in range(0, len(final_songs), max_songs)]
              for idx, chunk in enumerate(chunks, 1):
                  final_playlists[f"{base_name_with_suffix} ({idx})"] = chunk # Store the chunk of tuples
         else:
-            final_playlists[base_name_with_suffix] = songs # Store the list of tuples
+            final_playlists[base_name_with_suffix] = final_songs # Store the list of tuples
 
     return final_playlists
 
 
-def _select_top_n_diverse_playlists(best_result, n):
-    """
-    Selects the N most diverse playlists from a clustering result by weighting
-    both distance (diversity) and size (usefulness).
-    """
-    playlist_to_vector = best_result.get("playlist_to_centroid_vector_map", {})
-    original_playlists = best_result.get("named_playlists", {})
-    original_centroids = best_result.get("playlist_centroids", {})
 
-    if not playlist_to_vector or n <= 0 or n >= len(playlist_to_vector):
-        logger.info(f"Skipping Top-N selection: N={n}, available playlists={len(playlist_to_vector)}. Returning original set.")
-        return best_result
-
-    logger.info(f"Starting selection of Top {n} diverse playlists from {len(playlist_to_vector)} candidates.")
-
-    # --- NEW: Separate playlists by size ---
-    large_playlist_names = {name for name, songs in original_playlists.items() if len(songs) >= MIN_PLAYLIST_SIZE_FOR_TOP_N}
-    
-    # First, try to select from large playlists
-    large_playlist_vectors = {name: vec for name, vec in playlist_to_vector.items() if name in large_playlist_names}
-    
-    # Convert to lists for easier indexing
-    if len(large_playlist_vectors) >= n:
-        logger.info(f"Found {len(large_playlist_vectors)} playlists with >= {MIN_PLAYLIST_SIZE_FOR_TOP_N} songs. Selecting from this pool.")
-        available_names = list(large_playlist_vectors.keys())
-        available_vectors = np.array(list(large_playlist_vectors.values()))
-    else:
-        logger.info(f"Only {len(large_playlist_vectors)} playlists have >= {MIN_PLAYLIST_SIZE_FOR_TOP_N} songs. Using all {len(playlist_to_vector)} playlists for selection.")
-        available_names = list(playlist_to_vector.keys())
-        available_vectors = np.array(list(playlist_to_vector.values()))
-
-    if available_vectors.shape[0] <= n:
-        return best_result
-
-    selected_indices = []
-    
-    # 1. Start with the largest playlist to anchor the selection
-    playlist_sizes = [len(original_playlists.get(name, [])) for name in available_names]
-    first_idx = np.argmax(playlist_sizes)
-    selected_indices.append(first_idx)
-
-    # Create a boolean mask for available items
-    is_available = np.ones(len(available_names), dtype=bool)
-    is_available[first_idx] = False
-    
-    # 2. Iteratively select the playlist with the best combined score of distance and size
-    for _ in range(n - 1):
-        if not np.any(is_available):
-            break # No more playlists to select
-
-        selected_vectors = available_vectors[selected_indices]
-        remaining_vectors = available_vectors[is_available]
-        
-        # --- Calculate Diversity Score (Distance) ---
-        dist_matrix = cdist(remaining_vectors, selected_vectors, 'euclidean')
-        min_distances = np.min(dist_matrix, axis=1)
-        
-        # --- Calculate Size Score ---
-        original_indices_available = np.where(is_available)[0]
-        sizes_available = np.array([len(original_playlists.get(available_names[i], [])) for i in original_indices_available])
-        # Use log1p for a smooth curve with diminishing returns for size
-        size_scores = np.log1p(sizes_available)
-
-        # --- Normalize and Combine Scores ---
-        # Normalize both scores to a 0-1 range to make them comparable
-        max_dist = np.max(min_distances)
-        normalized_dist_scores = min_distances / max_dist if max_dist > 0 else np.zeros_like(min_distances)
-
-        max_size_score = np.max(size_scores)
-        normalized_size_scores = size_scores / max_size_score if max_size_score > 0 else np.zeros_like(size_scores)
-        
-        # Combine the scores (equal weighting)
-        # TEST USING * INSTEAD OF +
-        combined_scores = normalized_dist_scores * normalized_size_scores
-        
-        # Find the playlist that has the maximum combined score
-        best_candidate_local_idx = np.argmax(combined_scores)
-        
-        # Convert this local index back to the original full list index
-        best_original_idx = original_indices_available[best_candidate_local_idx]
-        
-        # Add to selected and mark as unavailable
-        selected_indices.append(best_original_idx)
-        is_available[best_original_idx] = False
-
-    # 3. Build the new, filtered result
-    selected_names = [available_names[i] for i in selected_indices]
-    
-    filtered_playlists = {name: original_playlists[name] for name in selected_names if name in original_playlists}
-    filtered_centroids = {name: original_centroids[name] for name in selected_names if name in original_centroids}
-    filtered_vector_map = {name: playlist_to_vector[name] for name in selected_names if name in playlist_to_vector}
-
-    new_result = best_result.copy()
-    new_result["named_playlists"] = filtered_playlists
-    new_result["playlist_centroids"] = filtered_centroids
-    new_result["playlist_to_centroid_vector_map"] = filtered_vector_map
-    
-    logger.info(f"Selected {len(selected_names)} diverse playlists: {selected_names}")
-
-    return new_result
