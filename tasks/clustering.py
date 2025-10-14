@@ -25,7 +25,8 @@ from config import (MAX_SONGS_PER_CLUSTER, MOOD_LABELS, STRATIFIED_GENRES,
                     MUTATION_KMEANS_COORD_FRACTION, MUTATION_INT_ABS_DELTA, MUTATION_FLOAT_ABS_DELTA,
                     TOP_N_ELITES, EXPLOITATION_START_FRACTION, EXPLOITATION_PROBABILITY_CONFIG,
                     SAMPLING_PERCENTAGE_CHANGE_PER_RUN, ITERATIONS_PER_BATCH_JOB, MAX_CONCURRENT_BATCH_JOBS,
-                    MIN_PLAYLIST_SIZE_FOR_TOP_N)
+                    MIN_PLAYLIST_SIZE_FOR_TOP_N, CLUSTERING_BATCH_TIMEOUT_MINUTES, CLUSTERING_MAX_FAILED_BATCHES,
+                    CLUSTERING_BATCH_CHECK_INTERVAL_SECONDS)
 
 # Import AI naming function and prompt template
 from ai import get_ai_playlist_name, creative_prompt_template
@@ -328,7 +329,11 @@ def run_clustering_task(
             "active_jobs": {},
             "elite_solutions": [],
             "last_subset_ids": [],
-            "processed_job_ids": set() # *** FIX 1: Add set to track processed jobs ***
+            "processed_job_ids": set(), # *** FIX 1: Add set to track processed jobs ***
+            # NEW: Batch tracking for timeout and failure recovery
+            "batch_start_times": {},  # job_id -> start_timestamp
+            "failed_batches": set(),  # Set of failed/timed out batch job_ids
+            "timed_out_batches": set() # Set of job_ids that have timed out
         }
 
         # Helper for logging and updating main task status, using a shared dictionary.
@@ -350,6 +355,9 @@ def run_clustering_task(
             details_for_db.pop('best_result', None) # Don't save the full result object in every progress update
             details_for_db.pop('last_subset_ids', None) # Remove the large list of IDs
             details_for_db.pop('processed_job_ids', None) # Don't save the set of job IDs to DB
+            details_for_db.pop('failed_batches', None) # Don't save the set of failed batches to DB
+            details_for_db.pop('timed_out_batches', None) # Don't save the set of timed out batches to DB
+            details_for_db.pop('batch_start_times', None) # Don't save batch start times to DB
 
             if current_job:
                 current_job.meta['progress'] = progress
@@ -408,7 +416,19 @@ def run_clustering_task(
 
                 _monitor_and_process_batches(_main_task_accumulated_details, current_task_id)
 
-                while len(_main_task_accumulated_details["active_jobs"]) < MAX_CONCURRENT_BATCH_JOBS and next_batch_to_launch < num_total_batches:
+                # Check if we should stop launching new batches due to too many failures
+                failed_batch_count = len(_main_task_accumulated_details.get("failed_batches", set()))
+                if failed_batch_count >= CLUSTERING_MAX_FAILED_BATCHES:
+                    logger.warning(f"Stopping new batch launches: {failed_batch_count} batches have failed (max: {CLUSTERING_MAX_FAILED_BATCHES})")
+                    # Force completion of remaining runs to prevent hanging
+                    remaining_runs = num_clustering_runs - _main_task_accumulated_details["runs_completed"]
+                    if remaining_runs > 0:
+                        _main_task_accumulated_details["runs_completed"] = num_clustering_runs
+                        logger.warning(f"Forced completion of {remaining_runs} remaining runs due to batch failures")
+                
+                while (len(_main_task_accumulated_details["active_jobs"]) < MAX_CONCURRENT_BATCH_JOBS 
+                       and next_batch_to_launch < num_total_batches 
+                       and failed_batch_count < CLUSTERING_MAX_FAILED_BATCHES):
                     _launch_batch_job(
                         _main_task_accumulated_details, current_task_id, next_batch_to_launch, num_clustering_runs,
                         genre_map, target_songs_per_genre, clustering_method,
@@ -603,23 +623,39 @@ def _calculate_target_songs_per_genre(genre_map, percentile, min_songs):
 
 def _monitor_and_process_batches(state_dict, parent_task_id, initial_check=False):
     """
-    Checks status of active jobs, processes results of finished ones.
+    Robust batch monitoring with timeout and failure recovery.
     
-    This function has been critically updated to ensure it checks *all* unprocessed child tasks
-    from the database, regardless of their current database status. This prevents the main
-    task from getting stuck if a child job completes/fails and updates its status in the
-    database but is missed by the parent due to a race condition with RQ job cleanup.
+    This function ensures clustering never hangs forever by:
+    1. Tracking batch start times and detecting timeouts
+    2. Processing timed-out batches as failed but continuing
+    3. Limiting the number of failed batches before stopping
+    4. Always making progress even if some batches fail
+    
+    CRITICAL: This prevents the main task from hanging at 4980/5000 runs
+    by implementing timeouts and forced progress tracking.
     """
-    # --- Local import to prevent circular dependency ---
+    import time
     from app_helper import (redis_conn, get_child_tasks_from_db, get_task_info_from_db,
-                    TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED, \
+                    TASK_STATUS_SUCCESS, TASK_STATUS_FAILURE, TASK_STATUS_REVOKED, 
                     TASK_STATUS_PENDING, TASK_STATUS_STARTED, TASK_STATUS_PROGRESS)
     
-    # 1. Get all child tasks from the database.
-    all_child_tasks = get_child_tasks_from_db(parent_task_id)
-    
-    jobs_to_check_and_process = []
+    current_time = time.time()
+    timeout_seconds = CLUSTERING_BATCH_TIMEOUT_MINUTES * 60
     processed_jobs = state_dict.get("processed_job_ids", set())
+    
+    # 1. Check for timed-out batches first - CRITICAL for preventing hangs
+    timed_out_jobs = []
+    for job_id, start_time in list(state_dict.get("batch_start_times", {}).items()):
+        if job_id not in processed_jobs:
+            elapsed_time = current_time - start_time
+            if elapsed_time > timeout_seconds:
+                logger.warning(f"TIMEOUT: Batch {job_id} has timed out after {elapsed_time/60:.1f} minutes (limit: {CLUSTERING_BATCH_TIMEOUT_MINUTES} min)")
+                timed_out_jobs.append(job_id)
+                state_dict.setdefault("timed_out_batches", set()).add(job_id)
+                state_dict.setdefault("failed_batches", set()).add(job_id)  # Timeouts count as failures
+    
+    # 2. Get all child tasks from database
+    all_child_tasks = get_child_tasks_from_db(parent_task_id)
 
     # 2. Identify all jobs that need a status check or result processing (i.e., not processed yet).
     jobs_for_status_check = []
@@ -688,6 +724,9 @@ def _monitor_and_process_batches(state_dict, parent_task_id, initial_check=False
                     state_dict["best_score"] = current_best_score
                     state_dict["best_result"] = best_from_batch
         else:
+            # Track this as a failed batch
+            state_dict.setdefault("failed_batches", set()).add(job_id)
+            
             # --- FIX: Account for runs from jobs that failed or were force-processed with no usable result ---
             # This is critical for the starvation case where 4940/5000 is stuck.
             task_info_for_runs = next((t for t in all_child_tasks if t['task_id'] == job_id), None)
@@ -714,6 +753,11 @@ def _monitor_and_process_batches(state_dict, parent_task_id, initial_check=False
         state_dict.setdefault("processed_job_ids", set()).add(job_id)
         if job_id in state_dict["active_jobs"]:
             del state_dict["active_jobs"][job_id]
+
+    # Check if we have too many failed batches
+    failed_batch_count = len(state_dict.get("failed_batches", set()))
+    if failed_batch_count >= CLUSTERING_MAX_FAILED_BATCHES:
+        logger.warning(f"Reached maximum failed batches ({failed_batch_count}/{CLUSTERING_MAX_FAILED_BATCHES}). Some jobs may be unstable.")
 
     # Prune elite solutions to keep only the best
     state_dict["elite_solutions"].sort(key=lambda x: x["score"], reverse=True)
@@ -780,14 +824,19 @@ def _launch_batch_job(state_dict, parent_task_id, batch_idx, total_runs, genre_m
     }
 
     new_job = rq_queue_default.enqueue(
-        run_clustering_batch_task,
+        'tasks.clustering.run_clustering_batch_task',
         kwargs=job_args,
         job_id=batch_job_id,
-        job_timeout=-1,
+        job_timeout=CLUSTERING_BATCH_TIMEOUT_MINUTES * 60,  # Convert minutes to seconds
         retry=Retry(max=3),
         on_failure=batch_task_failure_handler
     )
     state_dict["active_jobs"][new_job.id] = new_job
+    
+    # Record batch start time for timeout detection
+    import time
+    state_dict.setdefault("batch_start_times", {})[new_job.id] = time.time()
+    
     logger.info(f"Enqueued batch job {new_job.id} for runs {start_run}-{start_run + num_iterations - 1}.")
 
 

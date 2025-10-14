@@ -298,6 +298,9 @@ This are the default parameters on wich the analysis or clustering task will be 
 | **Evolutionary Clustering & Scoring**      |                                                                                            |                                        |
 | `ITERATIONS_PER_BATCH_JOB`                  | Number of clustering iterations processed per RQ batch job.                                | `20`                                   |
 | `MAX_CONCURRENT_BATCH_JOBS`                 | Maximum number of clustering batch jobs to run simultaneously.                             | `10`                                   |
+| `CLUSTERING_BATCH_TIMEOUT_MINUTES`          | Max time a batch can run before being considered failed (prevents infinite hangs).        | `60`                                   |
+| `CLUSTERING_MAX_FAILED_BATCHES`             | Max number of failed batches before stopping new launches and forcing completion.         | `10`                                   |
+| `CLUSTERING_BATCH_CHECK_INTERVAL_SECONDS`   | How often to check batch status for timeout detection.                                    | `30`                                   |
 | `TOP_K_MOODS_FOR_PURITY_CALCULATION`        | Number of centroid's top moods to consider when calculating playlist purity.              | `3`                                    |
 | `EXPLOITATION_START_FRACTION`               | Fraction of runs before starting to use elites.                                           | `0.2`                                  |
 | `EXPLOITATION_PROBABILITY_CONFIG`           | Probability of mutating an elite vs. random generation.                                   | `0.7`                                  |

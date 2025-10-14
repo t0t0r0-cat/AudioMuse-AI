@@ -523,6 +523,10 @@ def listen_for_index_reloads():
 # This is the original, working structure.
 from app_helper import get_child_tasks_from_db, get_score_data_by_ids, get_tracks_by_ids, save_track_analysis_and_embedding, track_exists, update_playlist_table
 
+# Import tasks modules to ensure they're available to RQ workers
+import tasks.clustering
+import tasks.analysis
+
 
 from app_chat import chat_bp
 from app_clustering import clustering_bp
