@@ -9,6 +9,37 @@ logger = logging.getLogger(__name__)
 
 REQUESTS_TIMEOUT = 300
 
+
+def _jellyfin_get(url, headers=None, params=None, stream=False):
+    """Wrapper around requests.get that logs the URL, params and counts items in the JSON response.
+    Returns the requests.Response when stream=True, otherwise returns parsed JSON (dict/list).
+    Raises the original exception to be handled by callers so existing behavior is unchanged.
+    """
+    try:
+        # Log minimal header info (don't print tokens)
+        header_info = {'has_token': bool(headers and ('X-Emby-Token' in headers or headers.get('X-Emby-Token') if isinstance(headers, dict) else False))}
+        logger.debug("Jellyfin request -> GET %s params=%s headers=%s", url, params, header_info)
+        r = requests.get(url, headers=headers, params=params, timeout=REQUESTS_TIMEOUT, stream=stream)
+        logger.debug("Jellyfin response status: %s for %s", r.status_code, url)
+        r.raise_for_status()
+        if stream:
+            return r
+        data = r.json()
+        if isinstance(data, dict) and 'Items' in data:
+            try:
+                logger.debug("Jellyfin returned %d items for %s", len(data.get('Items', [])), url)
+            except Exception:
+                logger.debug("Jellyfin returned items for %s (count unknown)", url)
+        else:
+            if isinstance(data, dict):
+                logger.debug("Jellyfin returned keys for %s: %s", url, list(data.keys()))
+            else:
+                logger.debug("Jellyfin returned non-dict response for %s: %s", url, type(data))
+        return data
+    except Exception:
+        logger.exception("Jellyfin request failed for %s", url)
+        raise
+
 # ##############################################################################
 # JELLYFIN IMPLEMENTATION
 # ##############################################################################
@@ -18,9 +49,7 @@ def _jellyfin_get_users(token):
     url = f"{config.JELLYFIN_URL}/Users"
     headers = {"X-Emby-Token": token}
     try:
-        r = requests.get(url, headers=headers, timeout=REQUESTS_TIMEOUT)
-        r.raise_for_status()
-        return r.json()
+        return _jellyfin_get(url, headers=headers)
     except Exception as e:
         logger.error(f"Jellyfin get_users failed: {e}", exc_info=True)
         return None
@@ -52,19 +81,21 @@ def get_recent_albums(limit):
     fetch_all = (limit == 0)
     while fetch_all or len(all_albums) < limit:
         size_to_fetch = page_size if fetch_all else min(page_size, limit - len(all_albums))
-        if size_to_fetch <= 0: break
+        if size_to_fetch <= 0:
+            break
         url = f"{config.JELLYFIN_URL}/Users/{config.JELLYFIN_USER_ID}/Items"
-        params = {"IncludeItemTypes": "MusicAlbum", "SortBy": "DateCreated", "SortOrder": "Descending", "Recursive": True, "Limit": size_to_fetch, "StartIndex": start_index}
+        params = {"IncludeItemTypes": "MusicAlbum", "SortBy": "DateCreated", "SortOrder": "Descending", "Recursive": config.JELLYFIN_RECURSIVE, "Limit": size_to_fetch, "StartIndex": start_index}
         try:
-            r = requests.get(url, headers=config.HEADERS, params=params, timeout=REQUESTS_TIMEOUT)
-            r.raise_for_status()
-            response_data = r.json()
-            albums = response_data.get("Items", [])
-            if not albums: break
+            response_data = _jellyfin_get(url, headers=config.HEADERS, params=params)
+            albums = response_data.get("Items", []) if isinstance(response_data, dict) else []
+            if not albums:
+                break
             all_albums.extend(albums)
             start_index += len(albums)
-            if len(albums) < size_to_fetch: break
-            if fetch_all and start_index >= response_data.get("TotalRecordCount", float('inf')): break
+            if len(albums) < size_to_fetch:
+                break
+            if fetch_all and start_index >= response_data.get("TotalRecordCount", float('inf')):
+                break
         except Exception as e:
             logger.error(f"Jellyfin get_recent_albums failed: {e}", exc_info=True)
             break
@@ -74,11 +105,10 @@ def get_tracks_from_album(album_id):
     """Fetches all audio tracks for a given album ID from Jellyfin using admin credentials."""
     url = f"{config.JELLYFIN_URL}/Users/{config.JELLYFIN_USER_ID}/Items"
     # Ensure we scan recursively so tracks nested inside folders are included
-    params = {"ParentId": album_id, "IncludeItemTypes": "Audio", "Recursive": True}
+    params = {"ParentId": album_id, "IncludeItemTypes": "Audio", "Recursive": config.JELLYFIN_RECURSIVE}
     try:
-        r = requests.get(url, headers=config.HEADERS, params=params, timeout=REQUESTS_TIMEOUT)
-        r.raise_for_status()
-        return r.json().get("Items", [])
+        response_data = _jellyfin_get(url, headers=config.HEADERS, params=params)
+        return response_data.get("Items", []) if isinstance(response_data, dict) else []
     except Exception as e:
         logger.error(f"Jellyfin get_tracks_from_album failed for album {album_id}: {e}", exc_info=True)
         return []
@@ -103,11 +133,10 @@ def download_track(temp_dir, item):
 def get_all_songs():
     """Fetches all songs from Jellyfin using admin credentials."""
     url = f"{config.JELLYFIN_URL}/Users/{config.JELLYFIN_USER_ID}/Items"
-    params = {"IncludeItemTypes": "Audio", "Recursive": True}
+    params = {"IncludeItemTypes": "Audio", "Recursive": config.JELLYFIN_RECURSIVE}
     try:
-        r = requests.get(url, headers=config.HEADERS, params=params, timeout=REQUESTS_TIMEOUT)
-        r.raise_for_status()
-        return r.json().get("Items", [])
+        response_data = _jellyfin_get(url, headers=config.HEADERS, params=params)
+        return response_data.get("Items", []) if isinstance(response_data, dict) else []
     except Exception as e:
         logger.error(f"Jellyfin get_all_songs failed: {e}", exc_info=True)
         return []
@@ -115,11 +144,10 @@ def get_all_songs():
 def get_playlist_by_name(playlist_name):
     """Finds a Jellyfin playlist by its exact name using admin credentials."""
     url = f"{config.JELLYFIN_URL}/Users/{config.JELLYFIN_USER_ID}/Items"
-    params = {"IncludeItemTypes": "Playlist", "Recursive": True, "Name": playlist_name}
+    params = {"IncludeItemTypes": "Playlist", "Recursive": config.JELLYFIN_RECURSIVE, "Name": playlist_name}
     try:
-        r = requests.get(url, headers=config.HEADERS, params=params, timeout=REQUESTS_TIMEOUT)
-        r.raise_for_status()
-        playlists = r.json().get("Items", [])
+        response_data = _jellyfin_get(url, headers=config.HEADERS, params=params)
+        playlists = response_data.get("Items", []) if isinstance(response_data, dict) else []
         return playlists[0] if playlists else None
     except Exception as e:
         logger.error(f"Jellyfin get_playlist_by_name failed for '{playlist_name}': {e}", exc_info=True)
@@ -138,11 +166,10 @@ def create_playlist(base_name, item_ids):
 def get_all_playlists():
     """Fetches all playlists from Jellyfin using admin credentials."""
     url = f"{config.JELLYFIN_URL}/Users/{config.JELLYFIN_USER_ID}/Items"
-    params = {"IncludeItemTypes": "Playlist", "Recursive": True}
+    params = {"IncludeItemTypes": "Playlist", "Recursive": config.JELLYFIN_RECURSIVE}
     try:
-        r = requests.get(url, headers=config.HEADERS, params=params, timeout=REQUESTS_TIMEOUT)
-        r.raise_for_status()
-        return r.json().get("Items", [])
+        response_data = _jellyfin_get(url, headers=config.HEADERS, params=params)
+        return response_data.get("Items", []) if isinstance(response_data, dict) else []
     except Exception as e:
         logger.error(f"Jellyfin get_all_playlists failed: {e}", exc_info=True)
         return []
@@ -167,11 +194,10 @@ def get_top_played_songs(limit, user_creds=None):
 
     url = f"{config.JELLYFIN_URL}/Users/{user_id}/Items"
     headers = {"X-Emby-Token": token}
-    params = {"IncludeItemTypes": "Audio", "SortBy": "PlayCount", "SortOrder": "Descending", "Recursive": True, "Limit": limit, "Fields": "UserData,Path"}
+    params = {"IncludeItemTypes": "Audio", "SortBy": "PlayCount", "SortOrder": "Descending", "Recursive": config.JELLYFIN_RECURSIVE, "Limit": limit, "Fields": "UserData,Path"}
     try:
-        r = requests.get(url, headers=headers, params=params, timeout=REQUESTS_TIMEOUT)
-        r.raise_for_status()
-        return r.json().get("Items", [])
+        response_data = _jellyfin_get(url, headers=headers, params=params)
+        return response_data.get("Items", []) if isinstance(response_data, dict) else []
     except Exception as e:
         logger.error(f"Jellyfin get_top_played_songs failed for user {user_id}: {e}", exc_info=True)
         return []
@@ -186,9 +212,8 @@ def get_last_played_time(item_id, user_creds=None):
     headers = {"X-Emby-Token": token}
     params = {"Fields": "UserData"}
     try:
-        r = requests.get(url, headers=headers, params=params, timeout=REQUESTS_TIMEOUT)
-        r.raise_for_status()
-        return r.json().get("UserData", {}).get("LastPlayedDate")
+        response_data = _jellyfin_get(url, headers=headers, params=params)
+        return response_data.get("UserData", {}).get("LastPlayedDate") if isinstance(response_data, dict) else None
     except Exception as e:
         logger.error(f"Jellyfin get_last_played_time failed for item {item_id}, user {user_id}: {e}", exc_info=True)
         return None

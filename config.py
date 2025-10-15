@@ -12,6 +12,9 @@ JELLYFIN_USER_ID = os.environ.get("JELLYFIN_USER_ID", "your_default_user_id")  #
 JELLYFIN_TOKEN = os.environ.get("JELLYFIN_TOKEN", "your_default_token")  # Replace with a suitable default or handle missing case
 TEMP_DIR = "/app/temp_audio"  # Always use /app/temp_audio
 HEADERS = {"X-Emby-Token": JELLYFIN_TOKEN}
+# Whether Jellyfin item queries should include nested items. Can be overridden via environment.
+# Set to 'False' if your Jellyfin setup requires non-recursive queries.
+JELLYFIN_RECURSIVE = os.environ.get("JELLYFIN_RECURSIVE", "True").lower() == "true"
 
 # --- Navidrome (Subsonic API) Constants ---
 # These are used only if MEDIASERVER_TYPE is "navidrome".
