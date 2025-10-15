@@ -73,7 +73,8 @@ def get_recent_albums(limit):
 def get_tracks_from_album(album_id):
     """Fetches all audio tracks for a given album ID from Jellyfin using admin credentials."""
     url = f"{config.JELLYFIN_URL}/Users/{config.JELLYFIN_USER_ID}/Items"
-    params = {"ParentId": album_id, "IncludeItemTypes": "Audio"}
+    # Ensure we scan recursively so tracks nested inside folders are included
+    params = {"ParentId": album_id, "IncludeItemTypes": "Audio", "Recursive": True}
     try:
         r = requests.get(url, headers=config.HEADERS, params=params, timeout=REQUESTS_TIMEOUT)
         r.raise_for_status()
